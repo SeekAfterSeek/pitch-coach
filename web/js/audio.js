@@ -244,6 +244,17 @@ export async function analyzeBuffer(ctx, buffer, opts = {}) {
   const total = Math.max(1, Math.floor((mono.length - win) / hop));
   let nextReport = 0;
 
+  // 分批处理，每批之间让出主线程，避免长时间阻塞 UI。
+  // 注意：不要用 setTimeout(0)——后台标签页会被节流到 1 秒，
+  // 一首 4 分钟歌要"让出"上百次，直接把分析拖成分钟级。
+  // 用 MessageChannel 让出，不受后台节流影响。
+  const yieldToUI = () => new Promise((resolve) => {
+    const ch = new MessageChannel();
+    ch.port1.onmessage = () => { ch.port1.close(); resolve(); };
+    ch.port2.postMessage(0);
+  });
+
+  const BATCH = 8000;
   for (let i = 0; i < total; i++) {
     const off = i * hop;
     detector.detect(mono.subarray(off, off + win));
@@ -259,7 +270,9 @@ export async function analyzeBuffer(ctx, buffer, opts = {}) {
     if (opts.progress && i >= nextReport) {
       opts.progress(i / total);
       nextReport = i + Math.max(1, Math.floor(total / 60));
-      if (i % 500 === 0) await new Promise((res) => setTimeout(res, 0)); // 让出主线程
+    }
+    if (i > 0 && i % BATCH === 0) {
+      await yieldToUI();
     }
   }
 
@@ -268,11 +281,17 @@ export async function analyzeBuffer(ctx, buffer, opts = {}) {
 }
 
 /**
- * 后处理：中值滤波 + 置信度门限 + 去八度跳变
+ * 后处理：中值滤波 + 置信度门限 + 去八度跳变 + 旋律平滑
  * 用于把原始 f0 序列变成可用的参考旋律
+ *
+ * 分三档强度：
+ *   opts.smooth = false     只做置信度过滤（实时用）
+ *   opts.smooth = true      默认（导入音频用）
+ *   opts.aggressive = true  强平滑（Live 现场版用，伴奏干扰大）
  */
 export function cleanFrames(frames, opts = {}) {
   const minConf = opts.minConfidence ?? 0.6;
+  const aggressive = opts.aggressive === true;
   const out = frames.map((f) => ({ ...f }));
 
   // 置信度/音量门限
@@ -283,8 +302,9 @@ export function cleanFrames(frames, opts = {}) {
     }
   }
 
-  // 3 点中值滤波（仅在有声帧上）
   const n = out.length;
+
+  // ── 1. 3 点中值滤波（去单帧毛刺）──
   const src = out.map((f) => (f.voiced ? f.midi : NaN));
   for (let i = 1; i < n - 1; i++) {
     if (!out[i].voiced) continue;
@@ -293,14 +313,13 @@ export function cleanFrames(frames, opts = {}) {
     if (win.length >= 2) {
       win.sort((a, b) => a - b);
       const med = win[win.length >> 1];
-      // 只修正离谱的毛刺
       if (Math.abs(med - src[i]) > 0.7 && Math.abs(med - src[i]) < 6) {
         out[i].midi = med;
       }
     }
   }
 
-  // 去八度：与前后各 3 帧的中位数比较
+  // ── 2. 去八度跳变 ──
   for (let i = 3; i < n - 3; i++) {
     if (!out[i].voiced) continue;
     const win = [];
@@ -312,6 +331,57 @@ export function cleanFrames(frames, opts = {}) {
     if (Math.abs(Math.abs(diff) - 12) < 1.2) {
       out[i].midi -= Math.sign(diff) * 12;
     }
+  }
+
+  // ── 3. 离群值剔除：与整段中位数差太远的帧丢掉 ──
+  // 现场版会被伴奏/观众声带偏，出现一些完全不属于人声音域的值
+  const allVals = out.filter((f) => f.voiced).map((f) => f.midi);
+  if (allVals.length > 20) {
+    allVals.sort((a, b) => a - b);
+    const q = (p) => allVals[Math.floor(p * (allVals.length - 1))];
+    const globalMed = q(0.5);
+    // 人声旋律通常在 3 个八度内
+    const loLimit = aggressive ? globalMed - 18 : globalMed - 24;
+    const hiLimit = aggressive ? globalMed + 18 : globalMed + 24;
+    for (const f of out) {
+      if (f.voiced && (f.midi < loLimit || f.midi > hiLimit)) {
+        f.voiced = false;
+        f.midi = 0;
+      }
+    }
+  }
+
+  // ── 4. 旋律平滑：滑窗中值（压掉颤音和短促干扰）──
+  // 只在同一个"音"内部平滑，跨音符的大跳保留
+  if (aggressive) {
+    const w = 9;  // ±4 帧 ≈ ±80ms
+    const med = out.map((f) => f.midi);
+    for (let i = 0; i < n; i++) {
+      if (!out[i].voiced) continue;
+      const win = [];
+      for (let j = Math.max(0, i - w); j <= Math.min(n - 1, i + w); j++) {
+        if (out[j].voiced) win.push(out[j].midi);
+      }
+      if (win.length < 3) continue;
+      win.sort((a, b) => a - b);
+      const m = win[win.length >> 1];
+      // 只有邻域足够集中才平滑（说明在同一个音里）
+      const spread = win[win.length - 1] - win[0];
+      if (spread < 3) out[i].midi = m;
+    }
+  }
+
+  // ── 5. 去掉过短的孤立音段（< 60ms 的多半是噪声）──
+  const minLen = aggressive ? 6 : 3;
+  let i = 0;
+  while (i < n) {
+    if (!out[i].voiced) { i++; continue; }
+    let j = i;
+    while (j < n && out[j].voiced) j++;
+    if (j - i < minLen) {
+      for (let k = i; k < j; k++) { out[k].voiced = false; out[k].midi = 0; }
+    }
+    i = j;
   }
 
   return out;

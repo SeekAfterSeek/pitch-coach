@@ -129,6 +129,26 @@ const el = {
   importProgress: $('importProgress'),
   importBar: $('importBar'),
   importStatus: $('importStatus'),
+  importArea: $('importArea'),
+
+  // 本地音乐库扫描
+  libScanPanel: $('libScanPanel'),
+  libScanTitle: $('libScanTitle'),
+  libScanSub: $('libScanSub'),
+  libScanList: $('libScanList'),
+  libScanFilter: $('libScanFilter'),
+  libScanSelectAll: $('libScanSelectAll'),
+  libScanCount: $('libScanCount'),
+  btnScanLib: $('btnScanLib'),
+  btnScanRescan: $('btnScanRescan'),
+  btnScanClose: $('btnScanClose'),
+  btnImportSelected: $('btnImportSelected'),
+  scanRange: $('scanRange'),
+  batchProgress: $('batchProgress'),
+  batchBar: $('batchBar'),
+  batchStatus: $('batchStatus'),
+  sepEnabled: $('sepEnabled'),
+  sepNote: $('sepNote'),
   drawerMask: $('drawerMask'),
   settingsDrawer: $('settingsDrawer'),
   helpMask: $('helpMask'),
@@ -177,9 +197,19 @@ function bandOf(devCents) {
  * 没开麦克风、没在播放、也没有可展示的轨迹。
  * 否则会挡住卷帘里刚画出来的内容。
  */
+/**
+ * 开局引导遮罩：只在"还没有任何可看内容"时出现。
+ * 一旦选了曲目（参考旋律已画出）或开了麦克风，就该让位给卷帘——
+ * 遮罩半透明压在上面会让用户看不清旋律。
+ */
 function updateHint() {
-  const hasSomethingToShow = S.micOn || S.playing || (S.liveFrames && S.liveFrames.length > 0);
-  el.rollHint.classList.toggle('hidden', hasSomethingToShow);
+  const hasContent = S.micOn || S.playing || !!S.ref;
+  el.rollHint.classList.toggle('hidden', hasContent);
+  if (hasContent && !S.micOn) {
+    // 有曲目但还没开麦：用状态条提示下一步
+    el.coachText.textContent = '点「开启麦克风」授权，然后点「播放参考」跟着唱';
+    el.coachBar.className = 'coach-bar';
+  }
 }
 
 function scoreColor(v) {
@@ -221,7 +251,7 @@ function selectTrack(id) {
   renderHistogram();
   updateRangeLabel();
 
-  el.rollHint.classList.toggle('hidden', !!S.ref && S.micOn || !!S.liveFrames?.length);
+  updateHint();
   el.btnPlay.disabled = !t;
   el.btnPlay.querySelector('.ico').textContent = '▶';
   el.btnPlay.lastChild.textContent = ' 播放参考';
@@ -1063,81 +1093,106 @@ async function handleFile(file) {
   el.importStatus.textContent = isMidi ? '解析 MIDI…' : '解码音频…';
 
   try {
-    if (isMidi) {
-      const buf = await file.arrayBuffer();
-      const midi = parseMidi(buf);
-      if (!midi.notes.length) throw new Error('MIDI 里没有音符');
-      const ref = referenceFromNotes(midi.notes, midi.duration, { title });
-      const track = {
-        id: uid('track'),
-        kind: 'custom',
-        title,
-        subtitle: `MIDI · ${midi.notes.length} 个音 · ${fmtTime(midi.duration)}`,
-        duration: midi.duration,
-        notes: midi.notes.map((n) => ({ ...n, label: Math.round(n.midi) })),
-        bpm: 120,
-        refData: packReference(ref),
-        audioBlob: null,
-      };
-      S.customTracks = addTrack(track);
-      finishImport(track);
-      return;
-    }
-
-    // —— 音频 ——
-    const ctx = await S.engine.ensureContext();
-    if (ctx.state === 'suspended') await ctx.resume();
-    const audioBuf = await decodeFile(ctx, file);
-    el.importStatus.textContent = `已解码 ${fmtTime(audioBuf.duration)} · 分析音高…`;
-
-    const rangeOpt = el.importRange.value;
-    const minHz = rangeOpt === 'male' ? 70 : rangeOpt === 'female' ? 160 : undefined;
-    const maxHz = rangeOpt === 'male' ? 700 : rangeOpt === 'female' ? 1300 : undefined;
-
-    const raw = await analyzeBuffer(ctx, audioBuf, {
-      hopSec: 0.01,
-      windowSize: 2048,
-      minHz,
-      maxHz,
-      progress: (p) => {
+    const track = await buildTrackFromBlob(file, {
+      title,
+      range: el.importRange.value,
+      snap: el.importSnap.checked,
+      onProgress: (p, msg) => {
         el.importBar.style.width = Math.round(p * 100) + '%';
-        if (p < 1) el.importStatus.textContent = `分析音高 ${Math.round(p * 100)}%`;
+        if (msg) el.importStatus.textContent = msg;
       },
     });
-
-    el.importStatus.textContent = '清理与平滑…';
-    const cleaned = cleanFrames(raw, { minConfidence: S.settings.minConfidence });
-
-    // 音频文件的帧→参考轨道（hop 用 0.02 节省空间）
-    const ref = referenceFromFrames(cleaned, {
-      title,
-      hop: 0.02,
-      snap: el.importSnap.checked,
-      source: 'audio',
-    });
-
-    if (ref.voicedRatio < 0.06) {
-      throw new Error('几乎没检测到音高。如果是纯伴奏，请换「人声/清唱」或提供带人声的版本。');
-    }
-
-    const track = {
-      id: uid('track'),
-      kind: 'custom',
-      title,
-      subtitle: `${fmtTime(ref.duration)} · ${midiToName(ref.range.low)}–${midiToName(ref.range.high)} · ${Math.round(ref.voicedRatio * 100)}% 有声`,
-      duration: ref.duration,
-      notes: null,
-      bpm: null,
-      refData: packReference(ref),
-      audioBlob: file, // File 本身就是 Blob，直接存
-    };
-
     S.customTracks = addTrack(track);
     finishImport(track);
   } catch (err) {
     el.importStatus.textContent = '失败：' + err.message;
     toast('导入失败：' + err.message, 'err', 6000);
   }
+}
+
+/**
+ * 从任意 Blob/File 构建一条曲目（音频或 MIDI）
+ * 抽出来供单文件导入和批量导入共用。
+ */
+async function buildTrackFromBlob(file, opts = {}) {
+  const name = (opts.title || file.name || '未命名').replace(/\.[^.]+$/, '');
+  const isMidi = /\.(mid|midi)$/i.test(file.name || '');
+  const report = opts.onProgress || (() => {});
+
+  if (isMidi) {
+    report(0.1, '解析 MIDI…');
+    const buf = await file.arrayBuffer();
+    const midi = parseMidi(buf);
+    if (!midi.notes.length) throw new Error('MIDI 里没有音符');
+    const ref = referenceFromNotes(midi.notes, midi.duration, { title: name });
+    report(1, '完成');
+    return {
+      id: uid('track'),
+      kind: 'custom',
+      title: name,
+      subtitle: `MIDI · ${midi.notes.length} 个音 · ${fmtTime(midi.duration)}`,
+      duration: midi.duration,
+      notes: midi.notes.map((n) => ({ ...n, label: Math.round(n.midi) })),
+      bpm: 120,
+      refData: packReference(ref),
+      audioBlob: null,
+    };
+  }
+
+  // —— 音频 ——
+  const ctx = await S.engine.ensureContext();
+  if (ctx.state === 'suspended') await ctx.resume();
+
+  report(0.05, '解码音频…');
+  const audioBuf = await decodeFile(ctx, file);
+  report(0.15, `已解码 ${fmtTime(audioBuf.duration)} · 分析音高…`);
+
+  const rangeOpt = opts.range || 'auto';
+  const minHz = rangeOpt === 'male' ? 70 : rangeOpt === 'female' ? 160 : undefined;
+  const maxHz = rangeOpt === 'male' ? 700 : rangeOpt === 'female' ? 1300 : undefined;
+
+  const raw = await analyzeBuffer(ctx, audioBuf, {
+    hopSec: 0.01,
+    windowSize: 2048,
+    minHz,
+    maxHz,
+    progress: (p) => {
+      report(0.15 + p * 0.75, `分析音高 ${Math.round(p * 100)}%`);
+    },
+  });
+
+  report(0.93, '清理与平滑…');
+  // 现场版（Live/演唱会/现场）伴奏与观众声干扰大，用更强的平滑。
+  // 文件名里带这些标记的自动判定。
+  const isLive = /(live|演唱会|现场|巡回|concert)/i.test(name);
+  const cleaned = cleanFrames(raw, {
+    minConfidence: S.settings.minConfidence,
+    aggressive: isLive || opts.aggressive === true,
+  });
+
+  const ref = referenceFromFrames(cleaned, {
+    title: name,
+    hop: 0.02,
+    snap: opts.snap !== false,
+    source: 'audio',
+  });
+
+  if (ref.voicedRatio < 0.04) {
+    throw new Error('几乎没检测到音高（可能是纯伴奏）');
+  }
+
+  report(1, '完成');
+  return {
+    id: uid('track'),
+    kind: 'custom',
+    title: name,
+    subtitle: `${fmtTime(ref.duration)} · ${midiToName(ref.range.low)}–${midiToName(ref.range.high)} · ${Math.round(ref.voicedRatio * 100)}% 有声`,
+    duration: ref.duration,
+    notes: null,
+    bpm: null,
+    refData: packReference(ref),
+    audioBlob: file,
+  };
 }
 
 function finishImport(track) {
@@ -1151,7 +1206,289 @@ function finishImport(track) {
   switchView('live');
 }
 
-/* 参考轨道 ↔ 可存储格式 */
+/* ══════════════════════ 本地音乐库扫描 ══════════════════════ */
+
+const LibScan = {
+  items: [],
+  selected: new Set(),
+  busy: false,
+};
+
+async function scanLocalLibrary(force = false) {
+  if (LibScan.busy) return;
+  LibScan.busy = true;
+
+  el.libScanPanel.hidden = false;
+  el.importArea.hidden = true;
+  el.libScanTitle.textContent = '正在扫描…';
+  el.libScanSub.textContent = '读取 Music / Downloads / Desktop';
+  el.libScanList.innerHTML = '<div class="empty">扫描中，请稍候…</div>';
+
+  try {
+    const r = await fetch('/api/scan?depth=5&limit=3000');
+    if (!r.ok) throw new Error('服务器返回 ' + r.status);
+    const data = await r.json();
+
+    LibScan.items = data.items || [];
+    LibScan.selected.clear();
+
+    const enc = LibScan.items.filter((i) => i.encrypted).length;
+    el.libScanTitle.textContent = `找到 ${LibScan.items.length} 个音频文件`;
+    el.libScanSub.textContent = enc > 0
+      ? `其中 ${enc} 个是加密格式（需先解密）`
+      : `${data.roots.length} 个目录 · 全部可直接导入`;
+
+    renderScanList();
+    toast(`扫描到 ${LibScan.items.length} 个音频`, LibScan.items.length ? 'ok' : '', 2200);
+  } catch (e) {
+    el.libScanTitle.textContent = '扫描失败';
+    el.libScanSub.textContent = e.message;
+    el.libScanList.innerHTML = `<div class="empty">${escapeHtml(e.message)}<br>请确认是通过 http://127.0.0.1 打开的页面</div>`;
+    toast('扫描失败：' + e.message, 'err', 5000);
+  } finally {
+    LibScan.busy = false;
+  }
+}
+
+function renderScanList() {
+  const kw = (el.libScanFilter.value || '').trim().toLowerCase();
+  const list = LibScan.items.filter((it) =>
+    !kw || it.name.toLowerCase().includes(kw)
+  );
+
+  if (!LibScan.items.length) {
+    el.libScanList.innerHTML = '<div class="empty">没有找到音频文件。<br>把歌放进「音乐」文件夹，或者用上面的「选择文件」导入。</div>';
+    updateScanCount();
+    return;
+  }
+  if (!list.length) {
+    el.libScanList.innerHTML = '<div class="empty">没有匹配的文件</div>';
+    updateScanCount();
+    return;
+  }
+
+  const frag = document.createDocumentFragment();
+  for (const it of list) {
+    const row = document.createElement('label');
+    row.className = 'scan-item';
+    const checked = LibScan.selected.has(it.path);
+    if (checked) row.classList.add('checked');
+    if (it.encrypted) row.classList.add('disabled');
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = checked;
+    cb.disabled = it.encrypted;
+    cb.addEventListener('change', () => {
+      if (cb.checked) LibScan.selected.add(it.path);
+      else LibScan.selected.delete(it.path);
+      row.classList.toggle('checked', cb.checked);
+      updateScanCount();
+    });
+
+    const nm = document.createElement('span');
+    nm.className = 'scan-name';
+    nm.textContent = it.name;
+    nm.title = it.path;
+
+    const meta = document.createElement('span');
+    meta.className = 'scan-meta';
+    meta.textContent = fmtSize(it.size);
+
+    row.appendChild(cb);
+    row.appendChild(nm);
+    row.appendChild(meta);
+    if (it.encrypted) {
+      const tag = document.createElement('span');
+      tag.className = 'scan-tag';
+      tag.textContent = '加密';
+      row.appendChild(tag);
+      row.title = 'QQ音乐/网易云加密格式，需先用转换工具解密';
+    }
+    frag.appendChild(row);
+  }
+
+  el.libScanList.innerHTML = '';
+  el.libScanList.appendChild(frag);
+  updateScanCount();
+}
+
+function updateScanCount() {
+  const n = LibScan.selected.size;
+  el.libScanCount.textContent = `${n} / ${LibScan.items.length}`;
+  el.btnImportSelected.textContent = `导入选中 (${n})`;
+  el.btnImportSelected.disabled = n === 0;
+  const visible = LibScan.items.filter((i) => !i.encrypted);
+  el.libScanSelectAll.checked = visible.length > 0 && n === visible.length;
+}
+
+function fmtSize(bytes) {
+  if (!bytes) return '';
+  if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + 'KB';
+  return (bytes / 1024 / 1024).toFixed(1) + 'MB';
+}
+
+/** 批量导入选中的文件 */
+async function importSelected() {
+  const paths = [...LibScan.selected];
+  if (!paths.length) return;
+
+  const total = paths.length;
+  let ok = 0, fail = 0;
+  const errors = [];
+
+  el.batchProgress.hidden = false;
+  el.btnImportSelected.disabled = true;
+
+  for (let i = 0; i < paths.length; i++) {
+    const p = paths[i];
+    const base = p.split(/[\\/]/).pop();
+    el.batchBar.style.width = Math.round((i / total) * 100) + '%';
+    el.batchStatus.textContent = `(${i + 1}/${total}) ${base}`;
+
+    try {
+      let file;
+      let srcForSep = null;
+
+      if (el.sepEnabled.checked) {
+        // 走人声分离：先在服务器上跑 demucs，再取回人声轨
+        srcForSep = p;
+        const vocalsBlob = await separateVocals(p, (pct, msg) => {
+          el.batchBar.style.width = Math.round(((i + pct * 0.8) / total) * 100) + '%';
+          if (msg) el.batchStatus.textContent = `(${i + 1}/${total}) ${base} — ${msg}`;
+        });
+        file = new File([vocalsBlob], base.replace(/\.[^.]+$/, '') + '-vocals.mp3', {
+          type: 'audio/mpeg',
+        });
+      } else {
+        // 通过服务器 API 读取本地文件
+        const resp = await fetch('/api/file?path=' + encodeURIComponent(p));
+        if (!resp.ok) throw new Error('读取失败 ' + resp.status);
+        const blob = await resp.blob();
+        file = new File([blob], base, { type: blob.type || 'audio/mpeg' });
+      }
+
+      const track = await buildTrackFromBlob(file, {
+        title: base,
+        range: el.scanRange.value,
+        snap: true,
+        onProgress: (p2, msg) => {
+          const basePct = el.sepEnabled.checked ? 0.8 : 0;
+          el.batchBar.style.width = Math.round(((i + basePct + p2 * (1 - basePct)) / total) * 100) + '%';
+          if (msg) el.batchStatus.textContent = `(${i + 1}/${total}) ${base} — ${msg}`;
+        },
+      });
+
+      S.customTracks = addTrack(track);
+      ok++;
+    } catch (e) {
+      fail++;
+      errors.push(`${base}: ${e.message}`);
+      console.warn('[batch import]', base, e);
+    }
+  }
+
+  el.batchBar.style.width = '100%';
+  el.batchStatus.textContent = `完成：成功 ${ok} 个${fail ? `，失败 ${fail} 个` : ''}`;
+  renderCustomList();
+  renderTrackStrip();
+
+  toast(`导入完成：${ok} 个成功${fail ? `，${fail} 个失败` : ''}`, ok ? 'ok' : 'err', 4000);
+
+  if (errors.length) {
+    console.warn('[batch import] 失败列表:\n' + errors.join('\n'));
+  }
+
+  LibScan.selected.clear();
+  renderScanList();
+
+  setTimeout(() => {
+    el.batchProgress.hidden = true;
+    el.btnImportSelected.disabled = LibScan.selected.size === 0;
+  }, 2500);
+
+  if (ok > 0) {
+    // 跳到第一条新曲目
+    const first = S.customTracks[S.customTracks.length - ok];
+    if (first) selectTrack(first.id);
+  }
+}
+
+/* ══════════════════════ 人声分离（Demucs） ══════════════════════ */
+
+const SEP = { available: false, checked: false, reason: '' };
+
+/** 启动时探测分离能力 */
+async function checkSepCapability() {
+  try {
+    const r = await fetch('/api/separate/status');
+    const j = await r.json();
+    SEP.available = !!j.available;
+    SEP.reason = j.reason || '';
+    if (SEP.available) {
+      el.sepNote.textContent = '可用';
+      el.sepNote.className = 'sep-note ok';
+      el.sepEnabled.disabled = false;
+    } else {
+      el.sepNote.textContent = '不可用';
+      el.sepNote.className = 'sep-note off';
+      el.sepEnabled.disabled = true;
+      el.sepEnabled.parentElement.title = SEP.reason;
+    }
+  } catch {
+    el.sepNote.textContent = '不可用';
+    el.sepNote.className = 'sep-note off';
+    el.sepEnabled.disabled = true;
+  }
+  SEP.checked = true;
+}
+
+/**
+ * 调用服务器上的 demucs 分离人声，返回人声轨 Blob
+ * @param {string} path 本地绝对路径
+ * @param {(pct:number, msg:string)=>void} onProgress
+ */
+async function separateVocals(path, onProgress = () => {}) {
+  const r = await fetch('/api/separate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  });
+  if (!r.ok) {
+    let msg = '分离请求失败 ' + r.status;
+    try { msg = (await r.json()).error || msg; } catch { /* noop */ }
+    throw new Error(msg);
+  }
+  const { jobId } = await r.json();
+  if (!jobId) throw new Error('没有返回任务号');
+
+  // 轮询进度
+  const t0 = Date.now();
+  let lastPct = 0;
+  for (;;) {
+    await new Promise((res) => setTimeout(res, 2500));
+    const s = await (await fetch('/api/separate/job?id=' + jobId)).json();
+    if (!s.ok) throw new Error('任务丢失');
+
+    const elapsed = Math.round((Date.now() - t0) / 1000);
+    if (s.status === 'running') {
+      // demucs 的百分比是"秒/秒"，映射到 0..1
+      const pct = Math.min(0.98, (s.progress || 0) / 100);
+      lastPct = Math.max(lastPct, pct);
+      onProgress(lastPct, `人声分离 ${Math.round(lastPct * 100)}% (${elapsed}s)`);
+      if (elapsed > 1800) throw new Error('分离超时（超过 30 分钟）');
+    } else if (s.status === 'done') {
+      onProgress(0.8, '分离完成，读取人声轨…');
+      const resp = await fetch('/api/separate/file?job=' + jobId);
+      if (!resp.ok) throw new Error('读取人声轨失败 ' + resp.status);
+      return await resp.blob();
+    } else {
+      throw new Error(s.error || '分离失败');
+    }
+  }
+}
+
+/** 参考轨道 ↔ 可存储格式 */
 function packReference(ref) {
   return {
     title: ref.title,
@@ -1392,10 +1729,68 @@ function bind() {
   // 导入
   $('btnPickFile').addEventListener('click', () => el.fileInput.click());
   el.fileInput.addEventListener('change', () => {
-    const f = el.fileInput.files?.[0];
-    if (f) handleFile(f);
+    const files = [...(el.fileInput.files || [])];
     el.fileInput.value = '';
+    if (!files.length) return;
+    if (files.length === 1) {
+      handleFile(files[0]);
+    } else {
+      // 多选：走批量
+      (async () => {
+        el.importProgress.hidden = false;
+        let ok = 0, fail = 0;
+        for (let i = 0; i < files.length; i++) {
+          el.importBar.style.width = Math.round((i / files.length) * 100) + '%';
+          el.importStatus.textContent = `(${i + 1}/${files.length}) ${files[i].name}`;
+          try {
+            const t = await buildTrackFromBlob(files[i], {
+              title: files[i].name,
+              range: el.importRange.value,
+              snap: el.importSnap.checked,
+            });
+            S.customTracks = addTrack(t);
+            ok++;
+          } catch (e) {
+            fail++;
+            console.warn('import fail', files[i].name, e);
+          }
+        }
+        el.importBar.style.width = '100%';
+        el.importStatus.textContent = `完成：${ok} 成功${fail ? `，${fail} 失败` : ''}`;
+        renderCustomList();
+        renderTrackStrip();
+        toast(`导入 ${ok} 个${fail ? `，${fail} 个失败` : ''}`, ok ? 'ok' : 'err');
+        setTimeout(() => { el.importProgress.hidden = true; }, 2200);
+      })();
+    }
   });
+
+  // ── 本地音乐库扫描 ──
+  el.btnScanLib.addEventListener('click', () => {
+    if (!SEP.checked) checkSepCapability();
+    scanLocalLibrary();
+  });
+  el.sepEnabled.addEventListener('change', () => {
+    if (el.sepEnabled.checked) {
+      toast('已开启人声分离：每个文件会多花 2-4 倍时长处理', '', 3200);
+    }
+  });
+  el.btnScanRescan.addEventListener('click', () => scanLocalLibrary(true));
+  el.btnScanClose.addEventListener('click', () => {
+    el.libScanPanel.hidden = true;
+    el.importArea.hidden = false;
+  });
+  el.libScanFilter.addEventListener('input', renderScanList);
+  el.libScanSelectAll.addEventListener('change', () => {
+    const visible = LibScan.items.filter((i) => !i.encrypted);
+    if (el.libScanSelectAll.checked) {
+      for (const it of visible) LibScan.selected.add(it.path);
+    } else {
+      LibScan.selected.clear();
+    }
+    renderScanList();
+  });
+  el.btnImportSelected.addEventListener('click', importSelected);
   ['dragenter', 'dragover'].forEach((ev) => {
     el.dropZone.addEventListener(ev, (e) => { e.preventDefault(); el.dropZone.classList.add('hover'); });
   });
@@ -1403,8 +1798,36 @@ function bind() {
     el.dropZone.addEventListener(ev, (e) => { e.preventDefault(); el.dropZone.classList.remove('hover'); });
   });
   el.dropZone.addEventListener('drop', (e) => {
-    const f = e.dataTransfer?.files?.[0];
-    if (f) handleFile(f);
+    const files = [...(e.dataTransfer?.files || [])];
+    if (!files.length) return;
+    if (files.length === 1) {
+      handleFile(files[0]);
+    } else {
+      // 多文件拖入：逐个导入
+      (async () => {
+        el.importProgress.hidden = false;
+        let ok = 0, fail = 0;
+        for (let i = 0; i < files.length; i++) {
+          el.importBar.style.width = Math.round((i / files.length) * 100) + '%';
+          el.importStatus.textContent = `(${i + 1}/${files.length}) ${files[i].name}`;
+          try {
+            const t = await buildTrackFromBlob(files[i], {
+              title: files[i].name,
+              range: el.importRange.value,
+              snap: el.importSnap.checked,
+            });
+            S.customTracks = addTrack(t);
+            ok++;
+          } catch (err) { fail++; }
+        }
+        el.importBar.style.width = '100%';
+        el.importStatus.textContent = `完成：${ok} 成功${fail ? `，${fail} 失败` : ''}`;
+        renderCustomList();
+        renderTrackStrip();
+        toast(`导入 ${ok} 个${fail ? `，${fail} 个失败` : ''}`, ok ? 'ok' : 'err');
+        setTimeout(() => { el.importProgress.hidden = true; }, 2200);
+      })();
+    }
   });
 
   // 设置抽屉
@@ -1540,10 +1963,21 @@ async function init() {
   requestAnimationFrame(loop);
   startSampling();
 
+  // 后台探测人声分离能力（不影响首屏）
+  checkSepCapability().catch(() => {});
+
   // 截图/调试用
   window.__PC = {
     S, roll, gauge, reviewRoll, selectTrack, play, stopPlayback,
     updateHint,
+    // 供自动化测试：完整跑一遍导入流程
+    async importForTest(file, opts = {}) {
+      const t = await buildTrackFromBlob(file, opts);
+      S.customTracks = addTrack(t);
+      renderCustomList();
+      renderTrackStrip();
+      return t;
+    },
     // 供自动化测试注入轨迹
     setTakeForView(frames, score) {
       const withBand = frames.map((f, i) => ({ ...f, band: score.bands[i] }));

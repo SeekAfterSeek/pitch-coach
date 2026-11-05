@@ -28,3 +28,8 @@ live-trace.json
 
 # 开发过程截图（docs/ 已含精选图）
 shots/
+
+# 人声分离产物
+.separated/
+samples/stems/
+

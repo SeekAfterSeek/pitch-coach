@@ -1116,6 +1116,184 @@ button, input, select { font-family: inherit; }
   font-family: ui-monospace, monospace;
 }
 
+/* ══════════ 本地音乐库扫描 ══════════ */
+
+.libscan {
+  border: 1px solid rgba(37, 224, 138, 0.25);
+  border-radius: var(--radius);
+  background: rgba(37, 224, 138, 0.04);
+  padding: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  max-height: 420px;
+}
+
+.libscan-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.libscan-info b {
+  display: block;
+  font-size: 12.5px;
+  color: var(--green);
+}
+
+.libscan-info small {
+  display: block;
+  font-size: 10.5px;
+  color: var(--text-3);
+  margin-top: 2px;
+}
+
+.libscan-actions { display: flex; gap: 5px; flex-shrink: 0; }
+
+.libscan-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.libscan-toolbar input[type=text] {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 5px 9px;
+  font-size: 11.5px;
+  outline: none;
+}
+
+.libscan-toolbar input[type=text]:focus { border-color: rgba(37, 224, 138, 0.5); }
+
+.switch.tiny { font-size: 11px; }
+
+.libscan-count {
+  font-family: ui-monospace, monospace;
+  font-size: 10.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.libscan-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 90px;
+  max-height: 230px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-right: 2px;
+}
+
+.libscan-list::-webkit-scrollbar { width: 6px; }
+.libscan-list::-webkit-scrollbar-thumb {
+  background: rgba(120, 150, 190, 0.22);
+  border-radius: 3px;
+}
+
+.scan-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11.5px;
+  transition: background 0.12s;
+  border: 1px solid transparent;
+}
+
+.scan-item:hover { background: rgba(255, 255, 255, 0.045); }
+
+.scan-item.checked {
+  background: rgba(37, 224, 138, 0.1);
+  border-color: rgba(37, 224, 138, 0.28);
+}
+
+.scan-item.disabled { opacity: 0.4; cursor: not-allowed; }
+
+.scan-item input { accent-color: var(--green); flex-shrink: 0; }
+
+.scan-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-2);
+}
+
+.scan-item.checked .scan-name { color: var(--text); }
+
+.scan-meta {
+  font-size: 9.5px;
+  color: var(--text-3);
+  font-family: ui-monospace, monospace;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.scan-tag {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(255, 77, 94, 0.16);
+  color: #ff8f99;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.scan-tag.ok {
+  background: rgba(37, 224, 138, 0.14);
+  color: var(--green);
+}
+
+.libscan-footer {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.field.inliner {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  font-size: 11px;
+}
+
+.field.inliner select {
+  flex: 1;
+  padding: 5px 8px;
+  font-size: 11.5px;
+}
+
+.sep-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.sep-note {
+  font-size: 10px;
+  color: var(--text-3);
+  font-family: ui-monospace, monospace;
+}
+
+.sep-note.ok { color: var(--green); }
+.sep-note.off { color: var(--orange); }
+
 /* ══════════ 空状态 ══════════ */
 
 .empty {

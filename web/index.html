@@ -247,14 +247,68 @@
       </div>
 
       <div class="panel">
-        <div class="panel-head"><h2>导入歌曲</h2></div>
-        <div class="import-area">
+        <div class="panel-head">
+          <h2>导入歌曲</h2>
+          <button class="btn small primary" id="btnScanLib">扫描本地音乐库</button>
+        </div>
+
+        <!-- 本地音乐库浏览 -->
+        <div class="libscan" id="libScanPanel" hidden>
+          <div class="libscan-head">
+            <div class="libscan-info">
+              <b id="libScanTitle">正在扫描…</b>
+              <small id="libScanSub">读取 Music / Downloads / Desktop</small>
+            </div>
+            <div class="libscan-actions">
+              <button class="btn tiny" id="btnScanRescan">重新扫描</button>
+              <button class="btn tiny" id="btnScanClose">收起</button>
+            </div>
+          </div>
+
+          <div class="libscan-toolbar">
+            <input type="text" id="libScanFilter" placeholder="筛选文件名…">
+            <label class="switch tiny">
+              <input type="checkbox" id="libScanSelectAll">
+              <span>全选</span>
+            </label>
+            <span class="libscan-count" id="libScanCount">0 / 0</span>
+          </div>
+
+          <div class="libscan-list" id="libScanList"></div>
+
+          <div class="libscan-footer">
+            <label class="field inliner">
+              <span>导入后音高范围</span>
+              <select id="scanRange">
+                <option value="auto">自动</option>
+                <option value="male">男声</option>
+                <option value="female">女声</option>
+              </select>
+            </label>
+            <button class="btn primary" id="btnImportSelected" disabled>导入选中 (0)</button>
+          </div>
+
+          <div class="sep-row">
+            <label class="switch tiny">
+              <input type="checkbox" id="sepEnabled">
+              <span>先做人声分离（现场版更准，但很慢）</span>
+            </label>
+            <span class="sep-note" id="sepNote">检测中…</span>
+          </div>
+
+          <div class="import-progress" id="batchProgress" hidden>
+            <div class="bar"><div class="bar-fill" id="batchBar"></div></div>
+            <span id="batchStatus">—</span>
+          </div>
+        </div>
+
+        <div class="import-area" id="importArea">
           <div class="drop-zone" id="dropZone">
             <div class="dz-icon">🎵</div>
             <p><b>拖入音频 / MIDI 文件</b></p>
             <p class="muted">mp3 · wav · m4a · flac · ogg · mid</p>
             <button class="btn small" id="btnPickFile">选择文件</button>
-            <input type="file" id="fileInput" accept="audio/*,.mid,.midi" hidden>
+            <input type="file" id="fileInput" accept="audio/*,.mid,.midi" multiple hidden>
           </div>
 
           <div class="import-opts">

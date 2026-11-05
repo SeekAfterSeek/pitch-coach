@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 音高检测核心 —— YIN (de Cheveigné & Kawahara, 2002) 的 FFT 加速实现
  *
  * 为什么选 YIN 而不是 CREPE：
@@ -42,6 +42,7 @@ export class PitchDetector {
     this.d = new Float64Array(this.windowSize);
     this.cmnd = new Float64Array(this.windowSize);
     this.cum = new Float64Array(this.windowSize + 1);
+    this.power = new Float64Array(this.windowSize);
 
     this.tauMin = Math.max(2, Math.floor(sampleRate / this.maxHz));
     this.tauMax = Math.min(
@@ -83,19 +84,22 @@ export class PitchDetector {
 
     // —— 1. 差分函数（经自相关加速）——
     const r = this.ac.run(x);
-    const power = new Float64Array(W); // 前缀和便于 O(1) 取区间能量
+    // 前缀和复用缓冲：每帧新建 Float64Array(W) 会产生大量 GC 压力，
+    // 离线分析一首 4 分钟歌要跑上万帧，实测这处占一半以上耗时。
+    const power = this.power;
     let acc = 0;
     for (let i = 0; i < W; i++) { acc += x[i] * x[i]; power[i] = acc; }
 
     const d = this.d;
     const dmax = this.tauMax;
+    const totalEnergy = power[W - 1];
     d[0] = 0;
     for (let tau = 1; tau <= dmax; tau++) {
       // Σ_{j=0}^{W-1-tau}(x[j]-x[j+tau])²
       // = E[0..W-tau-1] + E[tau..W-1] - 2·r[tau]
       const n = W - tau;
       const e1 = power[n - 1];
-      const e2 = power[W - 1] - (tau > 0 ? power[tau - 1] : 0);
+      const e2 = totalEnergy - power[tau - 1];
       d[tau] = Math.max(0, e1 + e2 - 2 * r[tau]);
     }
 
@@ -203,6 +207,7 @@ export class PitchDetector {
     this.d = new Float64Array(n);
     this.cmnd = new Float64Array(n);
     this.cum = new Float64Array(n + 1);
+    this.power = new Float64Array(n);
     this.tauMin = Math.max(2, Math.floor(this.sampleRate / this.maxHz));
     this.tauMax = Math.min(n - 2, Math.ceil(this.sampleRate / this.minHz));
   }
