@@ -76,6 +76,16 @@
           <div class="hist-bars" id="histBars"></div>
         </div>
 
+        <!-- 当前应唱音：一眼看到原唱在这句是什么音 -->
+        <div class="now-note" id="nowNote">
+          <div class="now-label">此刻应唱</div>
+          <div class="now-row">
+            <b class="now-pitch" id="nowPitch">—</b>
+            <span class="now-cents" id="nowCents"></span>
+          </div>
+          <div class="now-sub" id="nowSub">点「播放参考」开始</div>
+        </div>
+
         <div class="controls">
           <button class="btn primary" id="btnPlay">
             <span class="ico">▶</span> 播放参考
@@ -88,6 +98,7 @@
 
         <div class="mic-row">
           <button class="btn small" id="btnMic">开启麦克风</button>
+          <button class="btn small ghost" id="btnMicOff" hidden>关闭</button>
           <div class="meter"><div class="meter-fill" id="micMeter"></div></div>
         </div>
 
@@ -133,6 +144,16 @@
                  4. 想复盘就点「开始录音」</p>
             </div>
           </div>
+        </div>
+
+        <!-- 动态歌词：当前句放大、下句预览、高亮进度 -->
+        <div class="lyrics-strip" id="lyricsStrip" hidden>
+          <div class="lyr-prev" id="lyrPrev"></div>
+          <div class="lyr-cur">
+            <span id="lyrCurText">—</span>
+            <div class="lyr-progress"><div class="lyr-progress-fill" id="lyrProgressFill"></div></div>
+          </div>
+          <div class="lyr-next" id="lyrNext"></div>
         </div>
 
         <div class="roll-legend">
@@ -189,6 +210,7 @@
           </div>
           <div class="review-head-actions">
             <button class="btn small" id="btnPlayTake" disabled>▶ 播放</button>
+            <button class="btn small ghost" id="btnStopTake" disabled>■ 停止</button>
             <button class="btn small" id="btnRescore" disabled>重算分数</button>
             <button class="btn small ghost" id="btnExportJSON" disabled>导出 JSON</button>
             <button class="btn small ghost" id="btnExportWav" disabled>导出 WAV</button>
@@ -241,9 +263,27 @@
   <!-- ══════════════════ 曲库 ══════════════════ -->
   <section class="view" id="view-library">
     <div class="lib-grid">
-      <div class="panel">
-        <div class="panel-head"><h2>内置练习曲</h2></div>
-        <div class="lib-list" id="builtinList"></div>
+      <div class="panel lib-all-panel">
+        <div class="panel-head">
+          <h2>全部曲目</h2>
+          <span class="count" id="libTotalCount">0</span>
+        </div>
+        <div class="lib-toolbar">
+          <input type="text" id="libFilter" placeholder="搜索曲名…">
+          <div class="pill-group">
+            <button class="chip active" data-libfilter="all">全部</button>
+            <button class="chip" data-libfilter="builtin">内置</button>
+            <button class="chip" data-libfilter="custom">我导入的</button>
+            <button class="chip" data-libfilter="broken">需处理</button>
+          </div>
+        </div>
+        <div class="lib-list" id="allTracksList">
+          <div class="empty">加载中…</div>
+        </div>
+        <div class="lib-foot">
+          <span class="lib-hint">点曲目切换 · 点 ✕ 删除</span>
+          <button class="btn tiny ghost" id="btnClearBroken" hidden>一键清理失效曲目</button>
+        </div>
       </div>
 
       <div class="panel">
@@ -344,9 +384,28 @@
           </div>
         </div>
 
-        <div class="panel-head sub"><h2>我的曲目</h2></div>
-        <div class="lib-list" id="customList">
-          <div class="empty">还没有导入的曲目</div>
+        <div class="panel-head sub">
+          <h2>当前曲目的歌词</h2>
+          <span class="lyr-state" id="lyrState">—</span>
+        </div>
+        <div class="lyr-panel">
+          <div class="lyr-row">
+            <input type="text" id="lyrTitleInput" placeholder="歌名（留空则从文件名推断）">
+            <input type="text" id="lyrArtistInput" placeholder="歌手">
+          </div>
+          <div class="lyr-row">
+            <button class="btn small primary" id="btnFetchLyrics">自动找歌词</button>
+            <button class="btn small" id="btnImportLrc">导入 .lrc</button>
+            <button class="btn small ghost" id="btnEditLyrics">手动编辑</button>
+            <button class="btn small ghost" id="btnClearLyrics">清除</button>
+            <input type="file" id="lrcFileInput" accept=".lrc,.txt" hidden>
+          </div>
+          <div class="lyr-status" id="lyrStatus">选一首歌，然后点「自动找歌词」</div>
+          <textarea id="lyrEditor" class="lyr-editor" placeholder="[00:12.34]第一句歌词&#10;[00:16.78]第二句歌词" hidden></textarea>
+          <div class="lyr-actions" id="lyrEditorActions" hidden>
+            <button class="btn tiny primary" id="btnSaveLyrics">保存</button>
+            <button class="btn tiny ghost" id="btnCancelLyrics">取消</button>
+          </div>
         </div>
       </div>
     </div>

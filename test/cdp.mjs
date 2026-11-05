@@ -224,8 +224,24 @@ try {
 
   await evaluate(`document.querySelector('[data-view="library"]').click()`);
   await sleep(400);
-  const libItems = await evaluate(`document.querySelectorAll('#builtinList .lib-item').length`);
+  const libItems = await evaluate(`document.querySelectorAll('#allTracksList .lib-item').length`);
   report.checks.push({ name: '曲库列表渲染', ok: libItems >= 6, value: libItems });
+
+  // 曲库搜索 / 筛选
+  const libFilterWork = await evaluate(`(() => {
+    const chip = document.querySelector('[data-libfilter="builtin"]');
+    if (!chip) return { ok: false, reason: 'no chip' };
+    chip.click();
+    const afterBuiltin = document.querySelectorAll('#allTracksList .lib-item').length;
+    document.querySelector('[data-libfilter="all"]').click();
+    const afterAll = document.querySelectorAll('#allTracksList .lib-item').length;
+    return { ok: afterAll >= afterBuiltin && afterBuiltin > 0, afterBuiltin, afterAll };
+  })()`);
+  report.checks.push({
+    name: '曲库筛选可用',
+    ok: libFilterWork.ok === true,
+    value: `内置 ${libFilterWork.afterBuiltin} / 全部 ${libFilterWork.afterAll}`,
+  });
 
   // 6. 设置抽屉
   await evaluate(`document.getElementById('btnSettings').click()`);

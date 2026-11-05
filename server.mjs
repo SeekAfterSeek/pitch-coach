@@ -80,6 +80,10 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/separate/file') {
       return await handleSeparateFileStream(u, res);
     }
+    // ── API：歌词搜索（代理 lrclib.net，避免浏览器跨域）──
+    if (pathname === '/api/lyrics/search') {
+      return await handleLyricsSearch(u, res);
+    }
 
     if (pathname === '/') pathname = '/index.html';
 
@@ -445,6 +449,78 @@ async function handleSeparateFileStream(u, res) {
     'Cache-Control': 'no-store',
   });
   fs.createReadStream(job.vocals).pipe(res);
+}
+
+/* ══════════ 歌词搜索（代理 lrclib.net） ══════════ */
+
+const LRCLIB = 'https://lrclib.net';
+const LYRICS_UA = 'PitchCoach/1.0 (https://github.com/SeekAfterSeek/pitch-coach)';
+
+async function handleLyricsSearch(u, res) {
+  const title = (u.searchParams.get('title') || '').trim();
+  const artist = (u.searchParams.get('artist') || '').trim();
+
+  if (!title && !artist) {
+    return send(res, 400, JSON.stringify({ ok: false, error: '缺少 title/artist' }), {
+      'Content-Type': 'application/json; charset=utf-8',
+    });
+  }
+
+  const json = (obj) => send(res, 200, JSON.stringify(obj), {
+    'Content-Type': 'application/json; charset=utf-8',
+  });
+
+  try {
+    const results = [];
+
+    // 策略 1：先试精确接口（要求歌名歌手完全一致，命中率低但最准）
+    if (title && artist) {
+      try {
+        const url = `${LRCLIB}/api/get?` + new URLSearchParams({
+          track_name: title, artist_name: artist,
+        });
+        const r = await fetch(url, {
+          headers: { 'User-Agent': LYRICS_UA },
+          signal: AbortSignal.timeout(12000),
+        });
+        if (r.ok) {
+          const one = await r.json();
+          if (one && (one.syncedLyrics || one.plainLyrics)) results.push(one);
+        }
+      } catch { /* 精确接口不中很正常 */ }
+    }
+
+    // 策略 2：分别用几种组合搜索，合并去重
+    const queries = [];
+    if (title && artist) queries.push(`${title} ${artist}`);
+    if (title) queries.push(title);
+
+    const seen = new Set(results.map((x) => x.id));
+    for (const q of queries) {
+      try {
+        const url = `${LRCLIB}/api/search?` + new URLSearchParams({ q });
+        const r = await fetch(url, {
+          headers: { 'User-Agent': LYRICS_UA },
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!r.ok) continue;
+        const arr = await r.json();
+        if (!Array.isArray(arr)) continue;
+        for (const it of arr) {
+          if (it?.id && !seen.has(it.id)) {
+            seen.add(it.id);
+            results.push(it);
+          }
+        }
+      } catch { /* 单个查询失败不影响其它 */ }
+      // 已经有足够候选就不再多查
+      if (results.length >= 25) break;
+    }
+
+    json({ ok: true, count: results.length, results });
+  } catch (e) {
+    json({ ok: false, error: e.message, results: [] });
+  }
 }
 
 function findChrome() {

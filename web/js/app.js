@@ -25,6 +25,10 @@ import {
   quantile, sampleAt, uid, rafThrottle,
 } from './util.js';
 import {
+  parseLRC, toIntervals, lineAt, rankLyricCandidates, isUsableLyrics,
+  guessTitleArtist, distributeByLines,
+} from './lyrics.js';
+import {
   loadSettings, saveSettings, loadTracks, loadTracksWithAudio, addTrack, removeTrack,
   saveTake, listTakes, getTake, getTakeAudio, deleteTake, clearAll,
   downloadJSON, downloadBlob, DEFAULT_SETTINGS, getTrackAudio, clearTrackAudio,
@@ -86,6 +90,11 @@ const el = {
   btnRec: $('btnRec'),
   btnStop: $('btnStop'),
   btnMic: $('btnMic'),
+  btnMicOff: $('btnMicOff'),
+  nowNote: $('nowNote'),
+  nowPitch: $('nowPitch'),
+  nowCents: $('nowCents'),
+  nowSub: $('nowSub'),
   micMeter: $('micMeter'),
   latencySlider: $('latencySlider'),
   latencyVal: $('latencyVal'),
@@ -114,12 +123,15 @@ const el = {
   phraseGrid: $('phraseGrid'),
   coachNotes: $('coachNotes'),
   btnPlayTake: $('btnPlayTake'),
+  btnStopTake: $('btnStopTake'),
   btnRescore: $('btnRescore'),
   btnExportJSON: $('btnExportJSON'),
   btnExportWav: $('btnExportWav'),
   btnClearTakes: $('btnClearTakes'),
-  builtinList: $('builtinList'),
-  customList: $('customList'),
+  allTracksList: $('allTracksList'),
+  libTotalCount: $('libTotalCount'),
+  libFilter: $('libFilter'),
+  btnClearBroken: $('btnClearBroken'),
   dropZone: $('dropZone'),
   fileInput: $('fileInput'),
   importTitle: $('importTitle'),
@@ -149,6 +161,33 @@ const el = {
   batchStatus: $('batchStatus'),
   sepEnabled: $('sepEnabled'),
   sepNote: $('sepNote'),
+
+  // 统一曲库
+  allTracksList: $('allTracksList'),
+  libTotalCount: $('libTotalCount'),
+  libFilter: $('libFilter'),
+  btnClearBroken: $('btnClearBroken'),
+
+  // 歌词
+  lyricsStrip: $('lyricsStrip'),
+  lyrPrev: $('lyrPrev'),
+  lyrCurText: $('lyrCurText'),
+  lyrNext: $('lyrNext'),
+  lyrProgressFill: $('lyrProgressFill'),
+  lyrState: $('lyrState'),
+  lyrTitleInput: $('lyrTitleInput'),
+  lyrArtistInput: $('lyrArtistInput'),
+  btnFetchLyrics: $('btnFetchLyrics'),
+  btnImportLrc: $('btnImportLrc'),
+  btnEditLyrics: $('btnEditLyrics'),
+  btnClearLyrics: $('btnClearLyrics'),
+  lrcFileInput: $('lrcFileInput'),
+  lyrStatus: $('lyrStatus'),
+  lyrEditor: $('lyrEditor'),
+  lyrEditorActions: $('lyrEditorActions'),
+  btnSaveLyrics: $('btnSaveLyrics'),
+  btnCancelLyrics: $('btnCancelLyrics'),
+
   drawerMask: $('drawerMask'),
   settingsDrawer: $('settingsDrawer'),
   helpMask: $('helpMask'),
@@ -252,6 +291,7 @@ function selectTrack(id) {
   updateRangeLabel();
 
   updateHint();
+  updateLyricsUI();
   el.btnPlay.disabled = !t;
   el.btnPlay.querySelector('.ico').textContent = '▶';
   el.btnPlay.lastChild.textContent = ' 播放参考';
@@ -411,17 +451,21 @@ function stopPlayback(natural = false) {
     if (natural) stopRecording();
     // 用户主动停歌时保留录音状态，让他自己点停止
   }
+  // 播放停了，"此刻应唱"也该复位，否则会一直卡在最后一个音上
+  updateNowNote(null, null, null);
   updateHint();
 }
 
 /* ══════════════════════ 麦克风 ══════════════════════ */
 
 async function enableMic() {
+  if (S.micOn) return;
   try {
     await S.engine.startMic();
     S.micOn = true;
     el.btnMic.textContent = '麦克风已开';
     el.btnMic.classList.add('primary');
+    el.btnMicOff.hidden = false;
     el.statusDot.classList.add('on');
     el.statusText.textContent = '麦克风已连接';
     el.rollHint.classList.add('hidden');
@@ -438,6 +482,41 @@ async function enableMic() {
         : '麦克风开启失败：' + (err?.message || err);
     toast(msg, 'err', 5000);
   }
+}
+
+/** 关闭麦克风：停止采样、释放设备、复位所有指示 */
+function disableMic() {
+  if (!S.micOn) return;
+
+  // 正在录音就先收尾，避免留下半条录音
+  if (S.recording) {
+    stopRecording().catch(() => {});
+  }
+
+  S.micOn = false;
+  S.engine.stopMic();
+
+  el.btnMic.textContent = '开启麦克风';
+  el.btnMic.classList.remove('primary');
+  el.btnMicOff.hidden = true;
+  el.micMeter.style.width = '0%';
+  el.statusDot.classList.remove('on', 'rec');
+  el.statusText.textContent = '未连接麦克风';
+
+  // 表盘归零，别留着最后一次的音高让人误会
+  gauge.set(0, false, '--', '--');
+  gauge.smooth = 0;
+  gauge.target = 0;
+  gauge.draw();
+
+  S.liveFrames = [];
+  S.sessionScores = [];
+  S.histBins.fill(0);
+  renderHistogram();
+  resetLiveStats();
+  updateHint();
+
+  toast('麦克风已关闭', '', 1800);
 }
 
 function calibrateLatency() {
@@ -739,6 +818,9 @@ function sampleOnce() {
     roll.followCursor(songT - latency, S.windowSec);
     roll.cursorT = songT - latency;
     el.rollTimecode.textContent = fmtTime(Math.max(0, songT));
+
+    // 动态歌词：跟着歌曲时间走
+    updateLyricsDisplay(Math.max(0, songT - latency));
   } else {
     // 没在播放：自由练唱 / 当调音器，轨迹按真实时间滚
     const t = performance.now() / 1000;
@@ -754,6 +836,7 @@ function sampleOnce() {
   gauge.step();
   updateLiveStats();
   updateCoach(dev, band, refMidi);
+  updateNowNote(refMidi, frame.voiced ? frame.midi : null, band);
 }
 
 function resetLiveStats() {
@@ -818,6 +901,103 @@ function renderHistogram() {
 
 let coachTimer = 0;
 let lastCoach = '';
+
+/**
+ * 停止复盘页的录音回放。
+ * 原来只用 new Audio() 播了就丢引用，用户根本停不下来。
+ */
+function stopTakePlayback() {
+  const a = S.takeAudio;
+  if (a) {
+    try {
+      a.pause();
+      a.currentTime = 0;
+      a.onended = null;
+      a.onerror = null;
+      a.src = '';
+    } catch { /* 忽略 */ }
+    S.takeAudio = null;
+  }
+  if (S.takeAudioUrl) {
+    try { URL.revokeObjectURL(S.takeAudioUrl); } catch { /* 忽略 */ }
+    S.takeAudioUrl = null;
+  }
+  el.btnPlayTake.textContent = '▶ 播放';
+  el.btnPlayTake.classList.remove('primary');
+  el.btnStopTake.disabled = true;
+}
+
+/**
+ * 「此刻应唱」面板：直接把当前时刻参考旋律的音名写成大字。
+ * 卷帘里的灰条是整体的，具体到"这一拍该唱什么"需要单独提示，
+ * 否则新用户根本不知道自己在跟什么音。
+ */
+let lastNowText = '';
+function updateNowNote(refMidi, yourMidi, band) {
+  let text, cls = '', pitch, cents = '', sub;
+
+  if (refMidi != null) {
+    pitch = midiToName(refMidi);
+    const singing = yourMidi != null && yourMidi > 0;
+    if (singing) {
+      let dev = (yourMidi - refMidi) * 100;
+
+      // 先折叠八度：差 900¢ 以上基本是唱到别的音区了，
+      // 显示"跑高了 907¢"对用户没意义，要么是整首移八度（正常），
+      // 要么是检测跳八度（已折叠）。这里统一折到 ±600¢ 内再描述。
+      let octaveNote = '';
+      for (let k = 0; k < 3; k++) {
+        if (Math.abs(Math.abs(dev) - 1200) < 300) {
+          dev -= Math.round(dev / 1200) * 1200;
+          octaveNote = '（差一个八度）';
+        } else break;
+      }
+
+      const abs = Math.abs(dev);
+      cents = fmtCents(dev);
+
+      // 超过 200¢（两个半音）就别再掰扯"偏高偏低"了，直接说是别的音。
+      // 这种量级的偏差音分数没有参考价值，不显示数值，免得用户对着 -297¢ 发懵。
+      if (abs >= 200) {
+        cls = '';
+        cents = '';
+        sub = octaveNote
+          ? `你在 ${midiToName(yourMidi)}，差一个八度`
+          : `唱到别处去了 · 你在 ${midiToName(yourMidi)}`;
+      } else if (band === 'perfect' || band === 'great') {
+        cls = 'hit';
+        sub = '准，保持住';
+      } else if (band === 'ok') {
+        sub = dev > 0 ? '稍微高了一点' : '稍微低了一点';
+      } else if (band === 'sharp') {
+        sub = dev > 0 ? '偏高，往下压' : '偏低，往上抬';
+      } else {
+        sub = dev > 0 ? '跑高了' : '跑低了';
+      }
+
+      if (abs < 200) sub += ` · 你唱 ${midiToName(yourMidi)}`;
+    } else {
+      sub = '跟着这个音唱';
+    }
+  } else if (S.playing) {
+    pitch = '—';
+    cls = 'gap';
+    sub = '这里没有参考音，可以换气';
+  } else {
+    pitch = '—';
+    cls = 'gap';
+    sub = S.micOn ? '点「播放参考」开始跟唱' : '点「开启麦克风」授权';
+  }
+
+  text = pitch + '|' + cents + '|' + sub;
+  if (text === lastNowText) return;   // 避免每帧写 DOM
+  lastNowText = text;
+
+  el.nowPitch.textContent = pitch;
+  el.nowCents.textContent = cents;
+  el.nowSub.textContent = sub;
+  el.nowNote.className = 'now-note' + (cls ? ' ' + cls : '');
+}
 
 function updateCoach(dev, band, refMidi) {
   const now = performance.now();
@@ -998,7 +1178,11 @@ async function selectTake(id) {
   renderPhrases(score);
   renderCoachNotes(score, ref, full);
 
-  el.btnPlayTake.disabled = false;
+  // 切换录音时先停掉上一条的回放，避免两条声音叠在一起
+  stopTakePlayback();
+
+  el.btnPlayTake.disabled = !full.hasAudio;
+  el.btnPlayTake.title = full.hasAudio ? '播放这条录音' : '这条录音只有音高数据，没有音频';
   el.btnRescore.disabled = !ref;
   el.btnExportJSON.disabled = false;
   el.btnExportWav.disabled = !full.hasAudio;
@@ -1533,6 +1717,236 @@ async function separateVocals(path, onProgress = () => {}) {
   }
 }
 
+/* ══════════════════════ 歌词 ══════════════════════ */
+
+/**
+ * 歌词挂在曲目对象上：track.lyrics = { text, synced, source, updatedAt }
+ * 文本很小，随曲库一起进 localStorage 没问题。
+ */
+function currentLyrics() {
+  return S.track?.lyrics || null;
+}
+
+function lyricsIntervals() {
+  const ly = currentLyrics();
+  if (!ly || !ly.text) return [];
+  if (!S._lyrCache || S._lyrCacheFor !== S.track?.id || S._lyrCacheText !== ly.text) {
+    const lines = parseLRC(ly.text);
+    const dur = S.track?.duration || S.ref?.duration || 300;
+    S._lyrCache = toIntervals(lines, dur);
+    S._lyrCacheFor = S.track?.id;
+    S._lyrCacheText = ly.text;
+  }
+  return S._lyrCache;
+}
+
+async function saveLyricsToTrack(text, synced, source) {
+  if (!S.track) return;
+  const t = S.track;
+  t.lyrics = {
+    text,
+    synced: !!synced,
+    source: source || 'manual',
+    updatedAt: Date.now(),
+  };
+
+  const idx = S.customTracks.findIndex((x) => x.id === t.id);
+  if (idx >= 0) {
+    S.customTracks[idx] = t;
+    await addTrack(t);
+  }
+
+  S._lyrCache = null;
+  updateLyricsUI();
+  renderAllTracks();
+}
+
+function updateLyricsUI() {
+  const ly = currentLyrics();
+
+  if (el.lyrState) {
+    el.lyrState.textContent = !ly || !ly.text ? '暂无'
+      : ly.synced ? '同步歌词' : '纯文本';
+    el.lyrState.className = 'lyr-state' + (ly && ly.text ? (ly.synced ? ' ok' : ' warn') : '');
+  }
+
+  if (el.lyrEditor && !el.lyrEditor.hidden) return;
+
+  if (S.track && el.lyrTitleInput && document.activeElement !== el.lyrTitleInput) {
+    const guessed = guessTitleArtist(S.track.title || '');
+    if (!el.lyrTitleInput.value) el.lyrTitleInput.value = guessed.title || S.track.title || '';
+    if (el.lyrArtistInput && !el.lyrArtistInput.value) el.lyrArtistInput.value = guessed.artist || '';
+  }
+
+  if (el.lyricsStrip) {
+    el.lyricsStrip.hidden = !(ly && ly.text && S.track);
+  }
+}
+
+/** 每帧调用：更新动态歌词 */
+function updateLyricsDisplay(songT) {
+  if (!el.lyricsStrip || el.lyricsStrip.hidden) return;
+  const iv = lyricsIntervals();
+  if (!iv.length) return;
+
+  const { index, line, progress } = lineAt(iv, songT);
+
+  if (index < 0) {
+    el.lyrCurText.textContent = '…';
+    el.lyrPrev.textContent = '';
+    el.lyrNext.textContent = iv[0]?.text || '';
+    el.lyrProgressFill.style.width = '0%';
+    return;
+  }
+
+  el.lyrCurText.textContent = line.text || '♪';
+  el.lyrPrev.textContent = iv[index - 1]?.text || '';
+  el.lyrNext.textContent = iv[index + 1]?.text || '';
+  el.lyrProgressFill.style.width = Math.round(progress * 100) + '%';
+}
+
+async function fetchLyricsForCurrent() {
+  if (!S.track) { toast('先选一首歌', 'err'); return; }
+
+  const titleInput = el.lyrTitleInput.value.trim();
+  const artistInput = el.lyrArtistInput.value.trim();
+  const guessed = guessTitleArtist(S.track.title || '');
+  const title = titleInput || guessed.title || S.track.title || '';
+  const artist = artistInput || guessed.artist || '';
+
+  el.btnFetchLyrics.disabled = true;
+  el.lyrStatus.textContent = `正在搜索「${title}${artist ? ' - ' + artist : ''}」…`;
+
+  try {
+    const qs = new URLSearchParams({ title });
+    if (artist) qs.set('artist', artist);
+    const r = await fetch('/api/lyrics/search?' + qs);
+    const data = await r.json();
+
+    if (!data.ok) throw new Error(data.error || '搜索失败');
+    if (!data.results?.length) {
+      el.lyrStatus.textContent = '没找到歌词。试试只填歌名，去掉 (Live) 之类的版本标记；或者手动导入 .lrc。';
+      return;
+    }
+
+    const ranked = rankLyricCandidates(data.results, {
+      title, artist, duration: S.track.duration || S.ref?.duration,
+    });
+    const best = ranked.find(isUsableLyrics);
+
+    if (!best) {
+      const plain = ranked.find((x) => (x.plainLyrics || '').trim());
+      if (plain) {
+        const dur = S.track.duration || S.ref?.duration || 240;
+        const lines = distributeByLines(plain.plainLyrics, dur);
+        const text = lines.map((l) => `[${fmtLrcTime(l.time)}]${l.text}`).join('\n');
+        await saveLyricsToTrack(text, false, 'lrclib-plain');
+        el.lyrStatus.textContent = `只找到纯文本（${plain.trackName} - ${plain.artistName}），时间轴是估算的。`;
+        toast('已导入纯文本歌词（时间轴为估算）', 'warn', 4000);
+        return;
+      }
+      el.lyrStatus.textContent = '找到了同名歌曲，但都没有可用歌词。';
+      return;
+    }
+
+    await saveLyricsToTrack(best.syncedLyrics, true, 'lrclib');
+    el.lyrStatus.textContent =
+      `✓ 已应用：${best.trackName} - ${best.artistName}`
+      + `（${Math.round(best.duration || 0)}s，匹配度 ${best._score}）`;
+    toast('歌词已就位，可以跟唱了', 'ok', 2600);
+  } catch (e) {
+    el.lyrStatus.textContent = '搜索失败：' + e.message;
+    toast('找歌词失败：' + e.message, 'err', 4000);
+  } finally {
+    el.btnFetchLyrics.disabled = false;
+  }
+}
+
+function fmtLrcTime(sec) {
+  const m = Math.floor(sec / 60);
+  const s = sec - m * 60;
+  return `${String(m).padStart(2, '0')}:${s.toFixed(2).padStart(5, '0')}`;
+}
+
+async function importLrcFile(file) {
+  if (!S.track) { toast('先选一首歌', 'err'); return; }
+  try {
+    const text = await readTextSmart(file);
+    const lines = parseLRC(text);
+    if (!lines.length) {
+      toast('这个文件里没有 [mm:ss.xx] 时间戳，不是标准 LRC', 'err', 4500);
+      el.lyrStatus.textContent = '解析失败：没找到时间戳格式。';
+      return;
+    }
+    const norm = lines.map((l) => `[${fmtLrcTime(l.time)}]${l.text}`).join('\n');
+    await saveLyricsToTrack(norm, true, 'lrc-file');
+    el.lyrStatus.textContent = `✓ 已导入 ${lines.length} 行歌词`;
+    toast(`已导入 ${lines.length} 行歌词`, 'ok');
+  } catch (e) {
+    toast('导入失败：' + e.message, 'err');
+  }
+}
+
+/** 读文本，自动处理 GBK 等常见中文编码 */
+async function readTextSmart(file) {
+  const buf = await file.arrayBuffer();
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch {
+    try { return new TextDecoder('gbk').decode(buf); }
+    catch { return new TextDecoder('utf-8').decode(buf); }
+  }
+}
+
+function openLyricsEditor() {
+  const ly = currentLyrics();
+  el.lyrEditor.value = ly?.text || '';
+  el.lyrEditor.hidden = false;
+  el.lyrEditorActions.hidden = false;
+  el.lyrEditor.focus();
+  el.lyrStatus.textContent = '格式：[00:12.34]歌词内容，每行一句。没有时间戳会自动按行数估算。';
+}
+
+async function saveLyricsEditor() {
+  const text = el.lyrEditor.value.trim();
+  if (!text) { el.lyrStatus.textContent = '内容是空的，没保存。'; return; }
+
+  const lines = parseLRC(text);
+  const synced = lines.length > 0;
+  let finalText = text;
+
+  if (!synced) {
+    const dur = S.track?.duration || S.ref?.duration || 240;
+    const est = distributeByLines(text, dur);
+    finalText = est.map((l) => `[${fmtLrcTime(l.time)}]${l.text}`).join('\n');
+  }
+
+  await saveLyricsToTrack(finalText, true, 'manual');
+  el.lyrEditor.hidden = true;
+  el.lyrEditorActions.hidden = true;
+  el.lyrStatus.textContent = synced
+    ? `✓ 已保存 ${lines.length} 行（带时间戳）`
+    : '✓ 已保存（时间轴按行数估算）';
+  toast('歌词已保存', 'ok');
+}
+
+async function clearLyrics() {
+  if (!S.track) return;
+  if (!confirm('清除这首歌的歌词？')) return;
+
+  S.track.lyrics = null;
+  const idx = S.customTracks.findIndex((x) => x.id === S.track.id);
+  if (idx >= 0) {
+    delete S.customTracks[idx].lyrics;
+    await addTrack(S.customTracks[idx]);
+  }
+  S._lyrCache = null;
+  updateLyricsUI();
+  renderAllTracks();
+  el.lyrStatus.textContent = '歌词已清除。';
+  toast('已清除', '', 1500);
+}
+
 /** 参考轨道 ↔ 可存储格式 */
 function packReference(ref) {
   return {
@@ -1565,7 +1979,7 @@ function restoreReference(track) {
 
 function renderTrackStrip() {
   el.trackStrip.innerHTML = '';
-  for (const t of allTracks()) {
+  for (const t of visibleTracks()) {
     const d = document.createElement('button');
     d.className = 'track-card' + (S.track?.id === t.id ? ' active' : '');
     d.innerHTML = `<b>${escapeHtml(t.title)}</b><small>${escapeHtml(t.subtitle || '')}</small>`;
@@ -1574,50 +1988,188 @@ function renderTrackStrip() {
   }
 }
 
-function renderBuiltinList() {
-  el.builtinList.innerHTML = '';
-  for (const t of DEMO_TRACKS) {
-    el.builtinList.appendChild(libItem({ ...t, kind: 'builtin' }, '🎼'));
-  }
+/* ── 统一曲库（内置 + 导入，合并成一个列表）── */
+
+const LibFilter = { mode: 'all', keyword: '' };
+
+/** 内置曲目"删除"= 记进隐藏名单（可恢复），导入曲目则是真删 */
+const LS_HIDDEN_BUILTIN = 'pc.hiddenBuiltin.v1';
+
+function loadHiddenBuiltin() {
+  try { return new Set(JSON.parse(localStorage.getItem(LS_HIDDEN_BUILTIN) || '[]')); }
+  catch { return new Set(); }
+}
+function saveHiddenBuiltin(set) {
+  try { localStorage.setItem(LS_HIDDEN_BUILTIN, JSON.stringify([...set])); } catch { /* noop */ }
 }
 
-function renderCustomList() {
-  if (!S.customTracks.length) {
-    el.customList.innerHTML = '<div class="empty">还没有导入的曲目</div>';
+/** 所有可见曲目（内置 + 导入，排除已隐藏的内置） */
+function visibleTracks() {
+  const hidden = loadHiddenBuiltin();
+  const builtins = DEMO_TRACKS
+    .filter((t) => !hidden.has(t.id))
+    .map((t) => ({ ...t, kind: 'builtin' }));
+  return [...builtins, ...S.customTracks];
+}
+
+/** 判断一条曲目是否"有问题"，没问题返回 null */
+function trackIssue(t) {
+  if (t.kind === 'builtin') return null;
+  const isMidi = t.refData?.source === 'midi';
+  if (isMidi) return null;
+  if (!(t.audioBlob instanceof Blob)) return '音频缺失';
+  if (!t.refData) return '旋律未解析';
+  return null;
+}
+
+function renderAllTracks() {
+  const all = visibleTracks();
+  const kw = LibFilter.keyword.toLowerCase();
+
+  const list = all.filter((t) => {
+    if (LibFilter.mode === 'builtin' && t.kind !== 'builtin') return false;
+    if (LibFilter.mode === 'custom' && t.kind !== 'custom') return false;
+    if (LibFilter.mode === 'broken' && !trackIssue(t)) return false;
+    if (kw && !String(t.title).toLowerCase().includes(kw)) return false;
+    return true;
+  });
+
+  if (el.libTotalCount) el.libTotalCount.textContent = all.length;
+
+  const brokenCount = all.filter((t) => trackIssue(t)).length;
+  if (el.btnClearBroken) {
+    el.btnClearBroken.hidden = brokenCount === 0;
+    if (brokenCount) el.btnClearBroken.textContent = `一键清理失效曲目 (${brokenCount})`;
+  }
+
+  if (!all.length) {
+    el.allTracksList.innerHTML = '<div class="empty">曲库是空的。用右边的「扫描本地音乐库」导入，或刷新页面恢复内置练习曲。</div>';
     return;
   }
-  el.customList.innerHTML = '';
-  for (const t of S.customTracks) {
-    const item = libItem(t, t.refData?.source === 'midi' ? '🎹' : '🎵');
+  if (!list.length) {
+    el.allTracksList.innerHTML = '<div class="empty">没有匹配的曲目</div>';
+    return;
+  }
 
-    // MIDI 曲目本来就没有音频，只有导入的音频曲目才需要提醒
-    const isMidi = t.refData?.source === 'midi';
-    const audioMissing = !isMidi && !(t.audioBlob instanceof Blob);
-    if (audioMissing) {
+  el.allTracksList.innerHTML = '';
+  for (const t of list) {
+    const isBuiltin = t.kind === 'builtin';
+    const issue = trackIssue(t);
+
+    const row = document.createElement('div');
+    row.className = 'lib-item' + (S.track?.id === t.id ? ' active' : '');
+    if (issue) row.classList.add('broken');
+
+    const icon = isBuiltin ? '🎼' : (t.refData?.source === 'midi' ? '🎹' : '🎵');
+    const dur = t.duration ? fmtTime(t.duration) : '';
+
+    row.innerHTML = `
+      <div class="lib-icon">${icon}</div>
+      <div class="lib-info">
+        <b>${escapeHtml(t.title)}</b>
+        <small>${escapeHtml(t.subtitle || '')}${dur ? ' · ' + dur : ''}</small>
+      </div>
+    `;
+
+    const badge = document.createElement('span');
+    badge.className = 'lib-src ' + (isBuiltin ? 'src-builtin' : 'src-custom');
+    badge.textContent = isBuiltin ? '内置' : '导入';
+    row.appendChild(badge);
+
+    if (t.lyrics && t.lyrics.text) {
+      const lyr = document.createElement('span');
+      lyr.className = 'lib-src src-lyrics';
+      lyr.textContent = t.lyrics.synced ? '有歌词' : '歌词';
+      lyr.title = t.lyrics.synced ? '有同步歌词，可跟唱' : '只有纯文本歌词（时间轴是估算的）';
+      row.appendChild(lyr);
+    }
+
+    if (issue) {
       const warn = document.createElement('span');
       warn.className = 'scan-tag';
-      warn.textContent = '音频缺失·需重导';
-      warn.title = '这条曲目的音频文件在旧版本中丢失了（当时只存下了旋律线）。'
-        + '到「扫描本地音乐库」重新导入一次即可恢复。';
-      item.appendChild(warn);
+      warn.textContent = issue;
+      warn.title = issue === '音频缺失'
+        ? '音频文件丢了（旧版本只存了旋律线）。删掉这条，重新导入一次。'
+        : '旋律还没解析出来，重新导入一次。';
+      row.appendChild(warn);
     }
 
     const del = document.createElement('button');
     del.className = 'take-del';
     del.textContent = '✕';
-    del.title = '移除';
+    del.title = isBuiltin ? '从列表移除（刷新可恢复）' : '永久删除（含音频与歌词）';
     del.addEventListener('click', async (e) => {
       e.stopPropagation();
-      S.customTracks = await removeTrack(t.id);
-      if (S.track?.id === t.id) selectTrack(DEMO_TRACKS[0].id);
-      renderCustomList();
-      renderTrackStrip();
-      toast('已移除', '', 1400);
+      await deleteTrack(t);
     });
-    item.appendChild(del);
-    el.customList.appendChild(item);
+    row.appendChild(del);
+
+    row.addEventListener('click', (e) => {
+      if (e.target.classList.contains('take-del')) return;
+      selectTrack(t.id);
+      switchView('live');
+    });
+
+    el.allTracksList.appendChild(row);
   }
 }
+
+/** 删除一条曲目（内置=隐藏可恢复，导入=彻底删除） */
+async function deleteTrack(t) {
+  const isBuiltin = t.kind === 'builtin';
+  const msg = isBuiltin
+    ? `从列表移除「${t.title}」？\n\n这是内置练习曲，刷新页面可以恢复。`
+    : `删除「${t.title}」？\n\n音频和歌词会一起删掉，不可恢复。`;
+  if (!confirm(msg)) return;
+
+  if (isBuiltin) {
+    const hidden = loadHiddenBuiltin();
+    hidden.add(t.id);
+    saveHiddenBuiltin(hidden);
+  } else {
+    S.customTracks = await removeTrack(t.id);
+  }
+
+  if (S.track?.id === t.id) {
+    if (S.audioEl) { try { S.audioEl.pause(); } catch { /* noop */ } }
+    if (S.audioUrl) { URL.revokeObjectURL(S.audioUrl); S.audioUrl = null; }
+    const next = visibleTracks()[0];
+    if (next) selectTrack(next.id);
+  }
+
+  renderAllTracks();
+  renderTrackStrip();
+  toast(isBuiltin ? '已移除（刷新可恢复）' : '已删除', '', 1800);
+}
+
+/** 一键清理所有失效曲目 */
+async function clearBrokenTracks() {
+  const broken = visibleTracks().filter((t) => trackIssue(t));
+  if (!broken.length) return;
+  if (!confirm(`找到 ${broken.length} 条失效曲目，全部删除？\n\n这些曲目的音频已经丢了，只能重新导入。`)) return;
+
+  for (const t of broken) {
+    if (t.kind === 'builtin') {
+      const hidden = loadHiddenBuiltin();
+      hidden.add(t.id);
+      saveHiddenBuiltin(hidden);
+    } else {
+      S.customTracks = await removeTrack(t.id);
+    }
+  }
+  renderAllTracks();
+  renderTrackStrip();
+  toast(`已清理 ${broken.length} 条`, 'ok');
+}
+
+/**
+ * 兼容壳：曲库渲染已统一到 renderAllTracks（支持删除内置曲目、
+ * 歌词状态标记、失效曲目清理）。旧调用点仍指向这里。
+ */
+function renderLibrary() { renderAllTracks(); }
+function renderBuiltinList() { renderAllTracks(); }
+function renderCustomList() { renderAllTracks(); }
+
 
 function libItem(t, icon) {
   const d = document.createElement('div');
@@ -1665,6 +2217,7 @@ function bind() {
   });
 
   el.btnMic.addEventListener('click', enableMic);
+  el.btnMicOff.addEventListener('click', disableMic);
   el.btnPlay.addEventListener('click', play);
   el.btnStop.addEventListener('click', () => {
     stopPlayback();
@@ -1739,16 +2292,44 @@ function bind() {
     toast(el.cbReference.checked ? '参考音已开启' : '参考音已静音（只听自己）', '', 1800);
   });
 
-  // 复盘
+  // 复盘：录音回放（带停止）
   el.btnPlayTake.addEventListener('click', async () => {
-    if (!reviewTakeObj?.hasAudio) return;
+    // 正在播 → 再点一次就停
+    if (S.takeAudio && !S.takeAudio.paused) {
+      stopTakePlayback();
+      return;
+    }
+    if (!reviewTakeObj?.hasAudio) {
+      toast('这条录音没有音频（只有音高数据）', 'err');
+      return;
+    }
     const blob = await getTakeAudio(reviewTakeObj.id);
     if (!blob) { toast('找不到音频文件', 'err'); return; }
+
+    stopTakePlayback();                       // 先清掉上一条
     const url = URL.createObjectURL(blob);
     const a = new Audio(url);
-    a.play().catch((e) => toast('播放失败：' + e.message, 'err'));
-    a.onended = () => URL.revokeObjectURL(url);
+    S.takeAudio = a;
+    S.takeAudioUrl = url;
+
+    a.onended = () => stopTakePlayback();
+    a.onerror = () => {
+      toast('播放失败，文件可能已损坏', 'err');
+      stopTakePlayback();
+    };
+
+    try {
+      await a.play();
+      el.btnPlayTake.textContent = '■ 停止播放';
+      el.btnPlayTake.classList.add('primary');
+      el.btnStopTake.disabled = false;
+    } catch (e) {
+      toast('播放被拦截，请再点一次', 'err');
+      stopTakePlayback();
+    }
   });
+
+  el.btnStopTake.addEventListener('click', stopTakePlayback);
 
   el.btnRescore.addEventListener('click', async () => {
     if (reviewTakeObj) await selectTake(reviewTakeObj.id);
@@ -1832,11 +2413,92 @@ function bind() {
     }
   });
 
+  // ── 曲库：搜索 / 筛选 / 清理失效 ──
+  if (el.libFilter) {
+    el.libFilter.addEventListener('input', () => {
+      LibView.keyword = el.libFilter.value;
+      renderLibrary();
+    });
+  }
+  document.querySelectorAll('[data-libfilter]').forEach((b) => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('[data-libfilter]').forEach((x) => x.classList.remove('active'));
+      b.classList.add('active');
+      LibView.filter = b.dataset.libfilter;
+      renderLibrary();
+    });
+  });
+  if (el.btnClearBroken) {
+    el.btnClearBroken.addEventListener('click', async () => {
+      const broken = allTracks().filter(trackIsBroken);
+      if (!broken.length) return;
+      if (!confirm(`清理 ${broken.length} 条音频丢失的曲目？\n（内置曲目和 MIDI 不受影响）`)) return;
+      for (const t of broken) {
+        S.customTracks = await removeTrack(t.id);
+      }
+      if (S.track && trackIsBroken(S.track)) selectTrack(DEMO_TRACKS[0].id);
+      renderLibrary();
+      renderTrackStrip();
+      toast(`已清理 ${broken.length} 条`, 'ok', 2000);
+    });
+  }
+
   // ── 本地音乐库扫描 ──
   el.btnScanLib.addEventListener('click', () => {
     if (!SEP.checked) checkSepCapability();
     scanLocalLibrary();
   });
+
+  // ── 统一曲库：搜索、筛选、清理 ──
+  if (el.libFilter) {
+    el.libFilter.addEventListener('input', () => {
+      LibFilter.keyword = el.libFilter.value || '';
+      renderAllTracks();
+    });
+  }
+  document.querySelectorAll('[data-libfilter]').forEach((b) => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('[data-libfilter]').forEach((x) => x.classList.remove('active'));
+      b.classList.add('active');
+      LibFilter.mode = b.dataset.libfilter;
+      renderAllTracks();
+    });
+  });
+  if (el.btnClearBroken) {
+    el.btnClearBroken.addEventListener('click', clearBrokenTracks);
+  }
+
+  // ── 歌词 ──
+  if (el.btnFetchLyrics) {
+    el.btnFetchLyrics.addEventListener('click', fetchLyricsForCurrent);
+  }
+  if (el.btnImportLrc) {
+    el.btnImportLrc.addEventListener('click', () => el.lrcFileInput.click());
+  }
+  if (el.lrcFileInput) {
+    el.lrcFileInput.addEventListener('change', () => {
+      const f = el.lrcFileInput.files?.[0];
+      el.lrcFileInput.value = '';
+      if (f) importLrcFile(f);
+    });
+  }
+  if (el.btnEditLyrics) {
+    el.btnEditLyrics.addEventListener('click', openLyricsEditor);
+  }
+  if (el.btnSaveLyrics) {
+    el.btnSaveLyrics.addEventListener('click', saveLyricsEditor);
+  }
+  if (el.btnCancelLyrics) {
+    el.btnCancelLyrics.addEventListener('click', () => {
+      el.lyrEditor.hidden = true;
+      el.lyrEditorActions.hidden = true;
+      el.lyrStatus.textContent = '已取消编辑。';
+    });
+  }
+  if (el.btnClearLyrics) {
+    el.btnClearLyrics.addEventListener('click', clearLyrics);
+  }
+
   el.sepEnabled.addEventListener('change', () => {
     if (el.sepEnabled.checked) {
       toast('已开启人声分离：每个文件会多花 2-4 倍时长处理', '', 3200);

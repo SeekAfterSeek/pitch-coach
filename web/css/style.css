@@ -287,6 +287,64 @@ button, input, select { font-family: inherit; }
 
 .stat b.big { font-size: 20px; color: var(--green); }
 
+/* 此刻应唱的音 */
+.now-note {
+  border: 1px solid rgba(255, 209, 102, 0.28);
+  border-radius: var(--radius-sm);
+  padding: 8px 11px;
+  background: rgba(255, 209, 102, 0.07);
+  transition: all 0.2s;
+}
+
+.now-note.hit {
+  border-color: rgba(37, 224, 138, 0.45);
+  background: rgba(37, 224, 138, 0.09);
+}
+
+.now-note.gap {
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.02);
+  opacity: 0.6;
+}
+
+.now-label {
+  font-size: 10px;
+  color: var(--text-3);
+  letter-spacing: 0.5px;
+  margin-bottom: 1px;
+}
+
+.now-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.now-pitch {
+  font-family: ui-monospace, monospace;
+  font-size: 22px;
+  font-weight: 650;
+  color: var(--yellow);
+  line-height: 1.1;
+}
+
+.now-note.hit .now-pitch { color: var(--green); }
+
+.now-cents {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.now-sub {
+  font-size: 10.5px;
+  color: var(--text-3);
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* 直方图 */
 .histogram {
   border: 1px solid var(--line);
@@ -1293,6 +1351,222 @@ button, input, select { font-family: inherit; }
 
 .sep-note.ok { color: var(--green); }
 .sep-note.off { color: var(--orange); }
+
+/* ══════════ 统一曲库 ══════════ */
+
+.lib-all-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 320px;
+  max-height: calc(100vh - 130px);
+}
+
+.lib-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: 9px;
+}
+
+.lib-toolbar input[type=text] {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  outline: none;
+}
+
+.lib-toolbar input[type=text]:focus { border-color: rgba(37, 224, 138, 0.5); }
+
+.lib-all-panel .lib-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 3px;
+}
+
+.lib-all-panel .lib-list::-webkit-scrollbar { width: 6px; }
+.lib-all-panel .lib-list::-webkit-scrollbar-thumb {
+  background: rgba(120, 150, 190, 0.22);
+  border-radius: 3px;
+}
+
+.lib-item.broken {
+  border-color: rgba(255, 159, 67, 0.35);
+  background: rgba(255, 159, 67, 0.05);
+}
+
+.lib-src {
+  font-size: 9.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.lib-src.src-builtin {
+  background: rgba(120, 150, 190, 0.16);
+  color: var(--text-3);
+}
+
+.lib-src.src-custom {
+  background: rgba(63, 208, 224, 0.15);
+  color: var(--cyan);
+}
+
+.lib-src.src-lyrics {
+  background: rgba(140, 120, 255, 0.18);
+  color: var(--violet);
+}
+
+.lib-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  margin-top: 8px;
+}
+
+.lib-hint {
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+/* ══════════ 动态歌词 ══════════ */
+
+.lyrics-strip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 10px 16px 8px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(180deg, rgba(140, 120, 255, 0.10), rgba(20, 26, 36, 0.35));
+  border: 1px solid rgba(140, 120, 255, 0.22);
+  min-height: 86px;
+  overflow: hidden;
+}
+
+.lyr-prev,
+.lyr-next {
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  min-height: 16px;
+}
+
+.lyr-cur {
+  width: 100%;
+  text-align: center;
+  position: relative;
+}
+
+#lyrCurText {
+  display: block;
+  font-size: 19px;
+  font-weight: 600;
+  color: #eaf2ff;
+  letter-spacing: 0.5px;
+  text-shadow: 0 0 16px rgba(140, 120, 255, 0.45);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 0.15s;
+}
+
+.lyr-progress {
+  height: 2px;
+  background: rgba(255, 255, 255, 0.09);
+  border-radius: 1px;
+  margin-top: 5px;
+  overflow: hidden;
+}
+
+.lyr-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--violet), var(--cyan));
+  border-radius: 1px;
+  transition: width 0.08s linear;
+}
+
+/* ══════════ 歌词面板（曲库页） ══════════ */
+
+.lyr-state {
+  font-size: 10.5px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-3);
+  font-family: ui-monospace, monospace;
+}
+
+.lyr-state.ok { background: rgba(37, 224, 138, 0.16); color: var(--green); }
+.lyr-state.warn { background: rgba(255, 209, 102, 0.16); color: var(--yellow); }
+
+.lyr-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lyr-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.lyr-row input[type=text] {
+  flex: 1;
+  min-width: 110px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  outline: none;
+}
+
+.lyr-row input[type=text]:focus { border-color: rgba(140, 120, 255, 0.55); }
+
+.lyr-status {
+  font-size: 11px;
+  color: var(--text-2);
+  line-height: 1.65;
+  min-height: 18px;
+  padding: 6px 9px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.lyr-editor {
+  width: 100%;
+  min-height: 130px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 9px 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.8;
+  resize: vertical;
+  outline: none;
+}
+
+.lyr-editor:focus { border-color: rgba(140, 120, 255, 0.6); }
+
+.lyr-actions { display: flex; gap: 6px; }
 
 /* ══════════ 空状态 ══════════ */
 

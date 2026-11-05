@@ -40,7 +40,7 @@ export class PianoRoll {
       lane: ['#111823', '#0d141d'],
       gridStrong: 'rgba(120,150,190,0.20)',
       gridWeak: 'rgba(90,115,150,0.10)',
-      refBar: 'rgba(150,166,190,0.42)',
+      refBar: 'rgba(168,186,212,0.78)',
       refBarActive: 'rgba(255,210,120,0.85)',
       cursor: 'rgba(255,255,255,0.75)',
       perfect: '#25e08a',
@@ -204,28 +204,40 @@ export class PianoRoll {
     const sh = this.semitoneHeight();
     const activeMidi = this.activeRefMidi();
 
-    // 参考旋律：连续段合并绘制
-    let i0 = -1;
     const hop = ref.hop;
     const iStart = Math.max(0, Math.floor(this.view.t0 / hop) - 1);
     const iEnd = Math.min(ref.midi.length - 1, Math.ceil(this.view.t1 / hop) + 1);
+
+    const barH = Math.max(4, sh * 0.95);
+    const showNames = sh >= 13;   // 行高够才标音名，否则糊成一团
+    const pads = [];
 
     const flush = (a, b) => {
       if (a < 0 || b < a) return;
       const midi = ref.midi[a];
       const y = this.yOf(midi + 1.0);
-      const barH = Math.max(3, sh * 0.95);
-      ctx.fillStyle = this.colors.refBar;
       const x0 = this.xOf(a * hop);
       const x1 = this.xOf((b + 1) * hop);
-      roundRect(ctx, x0, y + (sh - barH) / 2, Math.max(2, x1 - x0), barH, 2);
+      const w = Math.max(2, x1 - x0);
+
+      // 底色（不透明一点，让"原唱在哪"一眼可见）
+      ctx.fillStyle = this.colors.refBar;
+      roundRect(ctx, x0, y + (sh - barH) / 2, w, barH, 2);
       ctx.fill();
 
-      // 当前应唱音高：高亮
+      // 描边：让灰条边界清晰，不与背景糊在一起
+      ctx.strokeStyle = 'rgba(190,210,235,0.55)';
+      ctx.lineWidth = 1;
+      roundRect(ctx, x0 + 0.5, y + (sh - barH) / 2 + 0.5, Math.max(1, w - 1), barH - 1, 2);
+      ctx.stroke();
+
+      pads.push({ x0, x1, midi, w });
+
+      // 当前应唱音：高亮
       if (this.mode === 'live' && activeMidi != null && Math.abs(midi - activeMidi) < 0.25) {
+        const cx = this.xOf(this.cursorT);
         ctx.fillStyle = this.colors.refBarActive;
-        const y2 = this.yOf(activeMidi + 1.0);
-        roundRect(ctx, Math.max(0, this.xOf(this.view.t0 + (this.cursorT - this.view.t0))), y2 + (sh - barH) / 2, Math.max(2, x1 - x0), barH, 2);
+        roundRect(ctx, cx, y + (sh - barH) / 2, Math.max(2, x1 - cx), barH, 2);
         ctx.fill();
       }
     };
@@ -242,6 +254,22 @@ export class PianoRoll {
       }
     }
     if (segStart >= 0) flush(segStart, iEnd);
+
+    // 音名标注：写在足够宽的灰条上，让人直接看出"这里该唱 C4"
+    if (showNames) {
+      ctx.save();
+      ctx.font = `${Math.min(11, Math.max(8, Math.floor(sh * 0.62)))}px ui-monospace, monospace`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      for (const p of pads) {
+        if (p.w < 22) continue;                       // 太窄放不下
+        const y = this.yOf(p.midi + 1.0) + sh / 2;
+        if (y < 6 || y > this.h - 4) continue;
+        ctx.fillStyle = 'rgba(20,28,38,0.9)';
+        ctx.fillText(midiToName(p.midi), Math.max(p.x0 + 3, 2), y);
+      }
+      ctx.restore();
+    }
   }
 
   activeRefMidi() {
