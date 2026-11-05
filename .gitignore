@@ -1,0 +1,30 @@
+# 依赖与构建产物
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*~
+
+# 系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 临时文件
+*.log
+live-result.json
+ui.json
+live-err.txt
+live-trace.json
+
+# 生成的音频（体积大，按需重新生成）
+# samples/*.wav
+
+# �������̽�ͼ��docs/ �Ѻ���ѡͼ��
+shots/

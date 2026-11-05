@@ -1,0 +1,16 @@
+numpy>=1.24
+scipy>=1.10
+soundfile>=0.12
+
+# 可选：更高精度的音高检测
+# torchcrepe>=0.0.20
+# torch>=2.0
+
+# 可选：人声分离（需要 PyTorch，CPU 上一首 4 分钟歌约 12-20 分钟）
+# demucs>=4.0
+
+# 可选：导出钢琴卷帘图
+# matplotlib>=3.7
+
+# 可选：m4a/aac/wma 解码（没有 ffmpeg 时）
+# imageio-ffmpeg>=0.4

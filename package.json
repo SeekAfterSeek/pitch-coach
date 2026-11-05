@@ -1,0 +1,14 @@
+{
+  "name": "pitch-coach",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "练唱音准教练 — 参考旋律 vs 实时人声的音高校准与评分",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node test/selftest.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
