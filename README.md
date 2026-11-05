@@ -373,7 +373,7 @@ python pitchcoach_cli.py separate song.mp3 -o stems
 
 ## 八、验证结果
 
-四套测试，**共 101 项全部通过**。
+五套测试，**共 119 项全部通过**。
 
 ### 算法自测（61 项）
 
@@ -386,7 +386,7 @@ $ node test/selftest.mjs
 评分单调性、八度修正、多录音排序、内置曲目、端到端合成音频、性能。
 
 关键数据：
-- 单帧检测 **0.42ms**（60fps 只需 16.7ms，余量 40 倍）
+- 单帧检测 **0.59ms**（60fps 只需 16.7ms，余量 28 倍）
 - 九种音高最大误差 **0.12 音分**
 - 检测与真值一致率 **96.3%**
 
@@ -420,7 +420,22 @@ $ node test/cdp-live.mjs
 `getUserMedia`，完整走完：麦克风授权 → AudioContext → 逐帧 YIN → 实时比对 →
 录音累积（1622 帧 / 11.7 秒）→ 保存 → 评分 → 逐句分析 → 诊断 → 多录音排行。
 
-### 这套测试抓出的 7 个真实 bug
+### 音频持久化与播放（18 项）
+
+```
+$ node test/audio-persist.test.mjs
+18 / 18 通过
+```
+
+专门盯住"导入的歌刷新后没声音"这一类问题：
+
+- 导入时音频确实写进 IndexedDB，localStorage 里不含 Blob 字段
+- 刷新页面后 audioBlob 仍是真 Blob，大小与导入时一致
+- 播放走音频模式（readyState=4、未暂停、时间在走）
+- **实测输出电平 peak 0.8975**，确认真的有声而不是"以为在播"
+- 参考音开关能立刻静音 / 恢复
+
+### 这套测试抓出的 10 个真实 bug
 
 浏览器实测的价值在这里——这些都不是静态检查能发现的：
 
@@ -432,6 +447,16 @@ $ node test/cdp-live.mjs
 6. `estimateOffset` 只要窗口够长就能凑出 1.00 相关度，"唱错"被判成"唱对"
 7. **requestAnimationFrame 在后台标签页被节流到 1fps**，录音丢 95% 帧
    （修复前 8 帧 / 11.7 秒，修复后 1622 帧）
+8. **`JSON.stringify(Blob)` 得到 `{}`**——曲库把整个 track（含音频 Blob）写进
+   localStorage，刷新后音频变成空对象，播放静默失败
+9. **`play()` 分支条件写错**：`kind === 'builtin' || !audioBlob`，
+   音频丢失的导入曲目会误入合成器分支，`scheduleNotes(null)` 抛 TypeError，
+   整个播放流程中断——这才是"点了播放没声音"的直接原因
+10. **「跟唱参考音」复选框是摆设**：只保存设置，从未作用于 `audioEl` / synth
+
+第 8、9、10 条是用户报"导入的歌播放没声音"后定位出来的，
+现在都有专门的回归测试（`audio-persist.test.mjs`）守着。
+
 
 ---
 

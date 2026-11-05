@@ -25,9 +25,9 @@ import {
   quantile, sampleAt, uid, rafThrottle,
 } from './util.js';
 import {
-  loadSettings, saveSettings, loadTracks, addTrack, removeTrack,
+  loadSettings, saveSettings, loadTracks, loadTracksWithAudio, addTrack, removeTrack,
   saveTake, listTakes, getTake, getTakeAudio, deleteTake, clearAll,
-  downloadJSON, downloadBlob, DEFAULT_SETTINGS,
+  downloadJSON, downloadBlob, DEFAULT_SETTINGS, getTrackAudio, clearTrackAudio,
 } from './store.js';
 
 /* ══════════════════════ 状态 ══════════════════════ */
@@ -316,11 +316,18 @@ async function play() {
   S.histBins.fill(0);
   renderHistogram();
 
-  if (S.track.kind === 'builtin' || !S.track.audioBlob) {
+  // 判断走哪条路：只有"内置曲目且确实有音符数组"才用合成器。
+  // 导入的歌曲 notes 是 null，必须走音频模式；
+  // 原来的条件 `!S.track.audioBlob` 在音频丢失时会把导入曲目误判成合成器，
+  // 进而 scheduleNotes(null) 抛 TypeError，整个播放流程中断——这就是"没声音"的根因。
+  const canSynth = Array.isArray(S.track.notes) && S.track.notes.length > 0;
+  const isBuiltin = S.track.kind === 'builtin';
+
+  if (isBuiltin && canSynth) {
     // —— 合成器模式 ——
     const synth = await ensureSynth();
     synth.stopAll();
-    synth.gain.gain.value = S.settings.referenceVolume;
+    synth.gain.gain.value = S.settings.playReference === false ? 0 : S.settings.referenceVolume;
     const t0 = ctx.currentTime + 0.25;
     const tr = S.settings.transpose;
     scheduleNotes(synth, S.track.notes, t0, { transpose: tr });
@@ -328,18 +335,56 @@ async function play() {
     S.playStartT = 0;
   } else {
     // —— 音频模式 ——
+    let blob = S.track.audioBlob;
+
+    // 兜底：如果内存里没有音频（例如刷新后没读到），尝试从 IndexedDB 补回
+    if (!(blob instanceof Blob) || blob.size === 0) {
+      try {
+        const restored = await getTrackAudio(S.track.id);
+        if (restored instanceof Blob && restored.size > 0) {
+          blob = restored;
+          S.track.audioBlob = restored;
+        }
+      } catch { /* 忽略 */ }
+    }
+
+    if (!(blob instanceof Blob) || blob.size === 0) {
+      // 音频真的丢了，别假装在播——恢复按钮状态并明确告诉用户
+      S.playing = false;
+      el.btnPlay.querySelector('.ico').textContent = '▶';
+      el.btnPlay.lastChild.textContent = ' 播放参考';
+      el.btnStop.disabled = true;
+      el.rollHint.classList.remove('hidden');
+      toast('这首曲目的音频丢失了（只保留下了旋律线）。请到「曲库」重新导入一次。', 'err', 6000);
+      return;
+    }
+
     if (!S.audioEl) {
       S.audioEl = new Audio();
       S.audioEl.preload = 'auto';
+      S.audioEl.crossOrigin = 'anonymous';
     }
     if (!S.audioEl.src || S.audioEl.dataset.trackId !== S.track.id) {
-      const url = URL.createObjectURL(S.track.audioBlob);
-      S.audioEl.src = url;
+      if (S.audioUrl) URL.revokeObjectURL(S.audioUrl);
+      S.audioUrl = URL.createObjectURL(blob);
+      S.audioEl.src = S.audioUrl;
       S.audioEl.dataset.trackId = S.track.id;
+      S.audioEl.load();
     }
     S.audioEl.currentTime = 0;
-    S.audioEl.volume = S.settings.referenceVolume;
-    await S.audioEl.play().catch(() => {});
+    S.audioEl.volume = S.settings.playReference === false ? 0 : S.settings.referenceVolume;
+    S.audioEl.muted = S.settings.playReference === false;
+
+    try {
+      await S.audioEl.play();
+    } catch (e) {
+      // 自动播放被拦截时给出可操作提示，而不是静默失败
+      toast('播放被浏览器拦截了，请再点一次「播放参考」', 'err', 4000);
+      S.playing = false;
+      el.btnPlay.querySelector('.ico').textContent = '▶';
+      el.btnPlay.lastChild.textContent = ' 播放参考';
+      return;
+    }
     const anchor = { ctx: ctx.currentTime, song: S.audioEl.currentTime };
     S.clock = () => anchor.song + (ctx.currentTime - anchor.ctx);
     S.playStartT = 0;
@@ -1102,7 +1147,7 @@ async function handleFile(file) {
         if (msg) el.importStatus.textContent = msg;
       },
     });
-    S.customTracks = addTrack(track);
+    S.customTracks = await addTrack(track);
     finishImport(track);
   } catch (err) {
     el.importStatus.textContent = '失败：' + err.message;
@@ -1379,7 +1424,7 @@ async function importSelected() {
         },
       });
 
-      S.customTracks = addTrack(track);
+      S.customTracks = await addTrack(track);
       ok++;
     } catch (e) {
       fail++;
@@ -1544,13 +1589,26 @@ function renderCustomList() {
   el.customList.innerHTML = '';
   for (const t of S.customTracks) {
     const item = libItem(t, t.refData?.source === 'midi' ? '🎹' : '🎵');
+
+    // MIDI 曲目本来就没有音频，只有导入的音频曲目才需要提醒
+    const isMidi = t.refData?.source === 'midi';
+    const audioMissing = !isMidi && !(t.audioBlob instanceof Blob);
+    if (audioMissing) {
+      const warn = document.createElement('span');
+      warn.className = 'scan-tag';
+      warn.textContent = '音频缺失·需重导';
+      warn.title = '这条曲目的音频文件在旧版本中丢失了（当时只存下了旋律线）。'
+        + '到「扫描本地音乐库」重新导入一次即可恢复。';
+      item.appendChild(warn);
+    }
+
     const del = document.createElement('button');
     del.className = 'take-del';
     del.textContent = '✕';
     del.title = '移除';
-    del.addEventListener('click', (e) => {
+    del.addEventListener('click', async (e) => {
       e.stopPropagation();
-      S.customTracks = removeTrack(t.id);
+      S.customTracks = await removeTrack(t.id);
       if (S.track?.id === t.id) selectTrack(DEMO_TRACKS[0].id);
       renderCustomList();
       renderTrackStrip();
@@ -1670,6 +1728,15 @@ function bind() {
   el.cbReference.addEventListener('change', () => {
     S.settings.playReference = el.cbReference.checked;
     saveSettings(S.settings);
+    // 立即作用于正在播放的音频，而不是等下次
+    if (S.audioEl) {
+      S.audioEl.muted = !el.cbReference.checked;
+      S.audioEl.volume = el.cbReference.checked ? S.settings.referenceVolume : 0;
+    }
+    if (S.synth) {
+      S.synth.gain.gain.value = el.cbReference.checked ? S.settings.referenceVolume : 0;
+    }
+    toast(el.cbReference.checked ? '参考音已开启' : '参考音已静音（只听自己）', '', 1800);
   });
 
   // 复盘
@@ -1748,7 +1815,7 @@ function bind() {
               range: el.importRange.value,
               snap: el.importSnap.checked,
             });
-            S.customTracks = addTrack(t);
+            S.customTracks = await addTrack(t);
             ok++;
           } catch (e) {
             fail++;
@@ -1816,7 +1883,7 @@ function bind() {
               range: el.importRange.value,
               snap: el.importSnap.checked,
             });
-            S.customTracks = addTrack(t);
+            S.customTracks = await addTrack(t);
             ok++;
           } catch (err) { fail++; }
         }
@@ -1937,7 +2004,7 @@ function syncSettingsUI() {
 async function init() {
   bind();
 
-  S.customTracks = loadTracks();
+  S.customTracks = await loadTracksWithAudio();
   S.windowSec = S.settings.windowSec || 6;
   el.latencySlider.value = S.settings.latencyMs;
   el.latencyVal.textContent = S.settings.latencyMs + ' ms';
@@ -1973,7 +2040,7 @@ async function init() {
     // 供自动化测试：完整跑一遍导入流程
     async importForTest(file, opts = {}) {
       const t = await buildTrackFromBlob(file, opts);
-      S.customTracks = addTrack(t);
+      S.customTracks = await addTrack(t);
       renderCustomList();
       renderTrackStrip();
       return t;

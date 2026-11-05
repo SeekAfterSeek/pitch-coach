@@ -1,14 +1,15 @@
 /**
  * 本地存储：录音、评分结果、曲库
  * - 录音音频（webm blob）与逐帧数据存 IndexedDB（体积大）
- * - 曲库与设置存 localStorage
+ * - 曲库元数据与设置存 localStorage；曲库的音频 Blob 也存 IndexedDB
  * 全部本地，不上传任何数据。
  */
 
 const DB_NAME = 'pitchcoach';
-const DB_VER = 1;
+const DB_VER = 2;                  // v2：新增 trackAudio，存导入歌曲的音频
 const STORE_TAKES = 'takes';
 const STORE_BLOBS = 'blobs';
+const STORE_TRACK_AUDIO = 'trackAudio';
 const LS_TRACKS = 'pc.tracks.v1';
 const LS_SETTINGS = 'pc.settings.v1';
 
@@ -27,6 +28,9 @@ function openDB() {
       }
       if (!db.objectStoreNames.contains(STORE_BLOBS)) {
         db.createObjectStore(STORE_BLOBS, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(STORE_TRACK_AUDIO)) {
+        db.createObjectStore(STORE_TRACK_AUDIO, { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -141,29 +145,109 @@ export function unpackFrames(buffer) {
   return out;
 }
 
-/* ────────────── 自定义曲库 ────────────── */
+/* ────────────── 自定义曲库 ──────────────
+ *
+ * 关键：音频 Blob 绝对不能放进 localStorage。
+ * JSON.stringify(Blob) 会得到 "{}"，存下去就是一个空对象——
+ * 刷新页面后曲目还在，但 createObjectURL({}) 失败，播放毫无声音。
+ * 所以拆成两处：
+ *   localStorage  ← 元数据（标题、时长、参考轨道、有无音频）
+ *   IndexedDB     ← 音频 Blob（体积大，支持二进制）
+ */
 
 export function loadTracks() {
   try {
-    return JSON.parse(localStorage.getItem(LS_TRACKS) || '[]');
+    const list = JSON.parse(localStorage.getItem(LS_TRACKS) || '[]');
+    // 清洗历史脏数据：把残留的空 blob 对象删掉
+    for (const t of list) {
+      if (t.audioBlob && !(t.audioBlob instanceof Blob)) {
+        t.hasAudio = t.hasAudio || false;
+        delete t.audioBlob;
+      }
+    }
+    return list;
   } catch { return []; }
 }
 
-export function saveTracks(list) {
-  localStorage.setItem(LS_TRACKS, JSON.stringify(list));
+/** 只序列化元数据，剥掉所有非 JSON 值（尤其是 Blob） */
+function serializeTrack(track) {
+  const out = { ...track };
+  delete out.audioBlob;
+  delete out._blob;
+  // 记录是否带有音频，供加载时判断
+  out.hasAudio = !!(track.audioBlob || track.hasAudio);
+  return out;
 }
 
-export function addTrack(track) {
+export function saveTracks(list) {
+  localStorage.setItem(LS_TRACKS, JSON.stringify(list.map(serializeTrack)));
+}
+
+/**
+ * 新增/更新曲目。
+ * 若 track.audioBlob 是真 Blob，会被异步写进 IndexedDB。
+ */
+export async function addTrack(track) {
   const list = loadTracks();
   const i = list.findIndex((t) => t.id === track.id);
-  if (i >= 0) list[i] = track; else list.push(track);
+  const meta = serializeTrack(track);
+  if (i >= 0) list[i] = meta; else list.push(meta);
   saveTracks(list);
+
+  if (track.audioBlob instanceof Blob) {
+    await putTrackAudio(track.id, track.audioBlob);
+  }
   return list;
 }
 
-export function removeTrack(id) {
+export async function removeTrack(id) {
   const list = loadTracks().filter((t) => t.id !== id);
   saveTracks(list);
+  await deleteTrackAudio(id).catch(() => {});
+  return list;
+}
+
+/* ── 曲目音频（IndexedDB）── */
+
+export async function putTrackAudio(id, blob) {
+  const db = await openDB();
+  await req2p(tx(db, STORE_TRACK_AUDIO, 'readwrite').put({ id, blob }));
+}
+
+export async function getTrackAudio(id) {
+  const db = await openDB();
+  const rec = await req2p(tx(db, STORE_TRACK_AUDIO, 'readonly').get(id));
+  return rec?.blob || null;
+}
+
+export async function deleteTrackAudio(id) {
+  const db = await openDB();
+  await req2p(tx(db, STORE_TRACK_AUDIO, 'readwrite').delete(id));
+}
+
+/** 清空曲库音频 */
+export async function clearTrackAudio() {
+  const db = await openDB();
+  await req2p(tx(db, STORE_TRACK_AUDIO, 'readwrite').clear());
+}
+
+/**
+ * 加载所有曲目并补齐音频 Blob（从 IndexedDB 读回来）
+ * 返回的对象里 audioBlob 是真正的 Blob，可以直接 createObjectURL
+ */
+export async function loadTracksWithAudio() {
+  const list = loadTracks();
+  for (const t of list) {
+    if (t.hasAudio) {
+      try {
+        const blob = await getTrackAudio(t.id);
+        if (blob) t.audioBlob = blob;
+        else t.hasAudio = false;   // 音频丢失，标记出来
+      } catch {
+        t.hasAudio = false;
+      }
+    }
+  }
   return list;
 }
 
@@ -177,17 +261,32 @@ export const DEFAULT_SETTINGS = {
   autoCalibrate: true,
   clickTrack: false,
   playReference: true,
-  referenceVolume: 0.55,
+  // 导入的人声音轨本身响度就比合成器低，0.55 听着会太小。
+  // 默认给满，用户嫌吵可以自己调。
+  referenceVolume: 0.9,
   micVolume: 1,
   showRealtimeScore: true,
   minConfidence: 0.6,
   windowSec: 6,
 };
 
+const LS_MIGRATED = 'pc.migrated.v1';
+
 export function loadSettings() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(LS_SETTINGS) || '{}'); } catch { saved = {}; }
+
+  // 一次性迁移：旧版默认音量 0.55 对导入的人声音轨太小，
+  // 老用户 localStorage 里存着旧值，光改默认值对他们无效。
+  // 只迁移"从未手动调过"的情况（值正好等于旧默认值）。
   try {
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(LS_SETTINGS) || '{}') };
-  } catch { return { ...DEFAULT_SETTINGS }; }
+    if (localStorage.getItem(LS_MIGRATED) !== '1') {
+      if (saved.referenceVolume === 0.55) saved.referenceVolume = 0.9;
+      localStorage.setItem(LS_MIGRATED, '1');
+    }
+  } catch { /* 忽略 */ }
+
+  return { ...DEFAULT_SETTINGS, ...saved };
 }
 
 export function saveSettings(s) {
