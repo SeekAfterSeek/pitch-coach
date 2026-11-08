@@ -261,7 +261,7 @@ function scoreColor(v) {
 /* ══════════════════════ 曲目管理 ══════════════════════ */
 
 function allTracks() {
-  return [...DEMO_TRACKS.map((t) => ({ ...t, kind: 'builtin' })), ...S.customTracks];
+  return visibleTracks();
 }
 
 function selectTrack(id) {
@@ -1772,10 +1772,13 @@ function updateLyricsUI() {
 
   if (el.lyrEditor && !el.lyrEditor.hidden) return;
 
+  // 搜索框始终跟随当前曲目（用户没在编辑时才覆盖，避免打断输入）
   if (S.track && el.lyrTitleInput && document.activeElement !== el.lyrTitleInput) {
     const guessed = guessTitleArtist(S.track.title || '');
-    if (!el.lyrTitleInput.value) el.lyrTitleInput.value = guessed.title || S.track.title || '';
-    if (el.lyrArtistInput && !el.lyrArtistInput.value) el.lyrArtistInput.value = guessed.artist || '';
+    el.lyrTitleInput.value = guessed.title || S.track.title || '';
+    if (el.lyrArtistInput && document.activeElement !== el.lyrArtistInput) {
+      el.lyrArtistInput.value = guessed.artist || '';
+    }
   }
 
   if (el.lyricsStrip) {
@@ -2706,6 +2709,45 @@ async function init() {
       renderCustomList();
       renderTrackStrip();
       return t;
+    },
+    // 供自动化测试：注入一首自定义曲目（可带真实歌名/歌手去验证歌词流程）
+    injectTestTrack({ title, artist, duration = 240 } = {}) {
+      const id = 'test-' + Date.now() + '-' + Math.floor(Math.random() * 1e4);
+      const t = {
+        id, kind: 'custom', title, subtitle: artist || '',
+        duration, refData: { source: 'midi', notes: [] }, audioBlob: null,
+      };
+      S.customTracks = [...S.customTracks, t];
+      // 直接选中（绕过 selectTrack 的列表查找，确保测试曲目一定被选中）
+      S.track = t;
+      el.trackTitle.textContent = t.title;
+      el.trackSub.textContent = t.subtitle || '自选曲目';
+      S.ref = null;
+      roll.setReference(null);
+      renderAllTracks();
+      renderTrackStrip();
+      updateLyricsUI();
+      return t;
+    },
+    // 供自动化测试：在指定歌曲时刻更新并读取动态歌词
+    showLyricsAt(t, forceShow = false) {
+      if (forceShow && el.lyricsStrip) el.lyricsStrip.hidden = false;
+      updateLyricsDisplay(t);
+      return {
+        cur: document.getElementById('lyrCurText').textContent,
+        prev: document.getElementById('lyrPrev').textContent,
+        next: document.getElementById('lyrNext').textContent,
+        progress: document.getElementById('lyrProgressFill').style.width,
+        hidden: el.lyricsStrip?.hidden,
+      };
+    },
+    getLyricsState() {
+      return {
+        state: (document.getElementById('lyrState') || {}).textContent,
+        stripHidden: document.getElementById('lyricsStrip')?.hidden,
+        curText: document.getElementById('lyrCurText')?.textContent,
+        trackHasLyrics: !!(S.track && S.track.lyrics && S.track.lyrics.text),
+      };
     },
     // 供自动化测试注入轨迹
     setTakeForView(frames, score) {
