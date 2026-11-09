@@ -360,7 +360,7 @@
               <span>分析方式</span>
               <select id="importMode">
                 <option value="vocal">原曲人声（提取旋律）</option>
-                <option value="hum">清唱 / 哼唱（直接提取）</option>
+                <option value="hum">纯人声参考（教唱用：录我的歌声当谱）</option>
                 <option value="midi">MIDI 文件</option>
               </select>
             </label>
@@ -405,6 +405,25 @@
           <div class="lyr-actions" id="lyrEditorActions" hidden>
             <button class="btn tiny primary" id="btnSaveLyrics">保存</button>
             <button class="btn tiny ghost" id="btnCancelLyrics">取消</button>
+          </div>
+        </div>
+
+        <div class="panel-head sub">
+          <h2>教唱模式（录入人声 → 清唱跟练）</h2>
+        </div>
+        <div class="vocal-panel hidden" id="vocalPanel">
+          <p class="vocal-desc">先录一段<strong>纯人声</strong>作为参考（它会自动解析出每个字的音高与节奏），再填歌词、对齐，然后清唱跟练，逐字点评「高了 / 低了 / 准、快了 / 慢了 / 没唱到」。</p>
+          <div class="vocal-actions">
+            <button class="btn small primary" id="btnVocalCapture" disabled>① 录入参考人声</button>
+            <button class="btn small" id="btnVocalAlign" disabled>② 对齐歌词</button>
+            <button class="btn small" id="btnVocalPractice" disabled>③ 开始清唱跟练</button>
+          </div>
+          <div class="vocal-status" id="vocalStatus"></div>
+
+          <div class="vocal-result hidden" id="vocalResultWrap">
+            <div class="sub-title">逐字点评</div>
+            <div class="vocal-summary" id="vocalSummary"></div>
+            <div class="vocal-list" id="vocalResultList"></div>
           </div>
         </div>
       </div>

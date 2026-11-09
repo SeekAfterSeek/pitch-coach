@@ -1568,6 +1568,43 @@ button, input, select { font-family: inherit; }
 
 .lyr-actions { display: flex; gap: 6px; }
 
+/* ══════════ 教唱工作流 ══════════ */
+
+.vocal-panel { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.vocal-panel.hidden { display: none; }
+.vocal-desc { font-size: 12px; color: var(--text-2); line-height: 1.7; margin: 0 0 10px; }
+.vocal-desc strong { color: var(--cyan); }
+.vocal-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.vocal-status { font-size: 11.5px; color: var(--text-2); min-height: 16px; line-height: 1.6; }
+.vocal-status:empty::before { content: '—'; color: var(--text-3); }
+
+.vocal-result { margin-top: 12px; }
+.vocal-result.hidden { display: none; }
+.vocal-summary {
+  font-size: 12px; color: var(--text); background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 8px 10px; margin-bottom: 8px;
+}
+.vocal-list { display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow-y: auto; }
+.vocal-unit {
+  display: grid; grid-template-columns: 42px 48px 1fr; gap: 8px; align-items: center;
+  font-size: 12px; padding: 5px 8px; border-radius: 8px;
+  background: rgba(120,150,190,0.05); border: 1px solid var(--line);
+}
+.vocal-unit .v-unit-char { font-weight: 700; color: var(--text); }
+.vocal-unit .v-unit-pitch { color: var(--cytos, var(--cyan)); font-variant-numeric: tabular-nums; }
+.vocal-unit .v-unit-text { color: var(--text-2); }
+.vocal-unit.perfect { border-color: rgba(37,224,138,0.5); }
+.vocal-unit.perfect .v-unit-text { color: var(--green); }
+.vocal-unit.great { border-color: rgba(125,220,90,0.4); }
+.vocal-unit.ok .v-unit-text { color: var(--lime); }
+.vocal-unit.sharp .v-unit-text { color: var(--orange); }
+.vocal-unit.off .v-unit-text { color: var(--red); }
+.vocal-unit.missed { border-color: rgba(255,77,94,0.55); }
+.vocal-unit.missed .v-unit-text { color: var(--red); font-weight: 600; }
+.vocal-unit.rest { opacity: 0.55; }
+.vocal-unit.rest .v-unit-text { color: var(--text-3); }
+
 /* ══════════ 空状态 ══════════ */
 
 .empty {

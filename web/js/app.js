@@ -29,6 +29,9 @@ import {
   guessTitleArtist, distributeByLines,
 } from './lyrics.js';
 import {
+  analyzeVocal, alignLyricsToVocal, scoreVocalTake, vocalUnitText,
+} from './vocal.js';
+import {
   loadSettings, saveSettings, loadTracks, loadTracksWithAudio, addTrack, removeTrack,
   saveTake, listTakes, getTake, getTakeAudio, deleteTake, clearAll,
   downloadJSON, downloadBlob, DEFAULT_SETTINGS, getTrackAudio, clearTrackAudio,
@@ -46,6 +49,12 @@ const S = {
   // 当前曲目
   track: null,          // {id, title, subtitle, notes?, duration, kind:'builtin'|'custom'}
   ref: null,            // Reference
+
+  // 教唱工作流（录入参考人声 → 清唱跟练）
+  vocalMode: false,     // 是否处于"教唱"模式
+  refVocal: null,       // {ref, notes, frames} 录入的参考人声解析结果
+  lyricUnits: null,     // alignLyricsToVocal 的产出（每个字的谱子）
+  vocalStep: 'idle',    // 'idle' | 'analyze' | 'align' | 'practice' | 'result'
 
   // 播放
   playing: false,
@@ -188,6 +197,16 @@ const el = {
   btnSaveLyrics: $('btnSaveLyrics'),
   btnCancelLyrics: $('btnCancelLyrics'),
 
+  // 教唱工作流
+  vocalPanel: $('vocalPanel'),
+  btnVocalCapture: $('btnVocalCapture'),
+  btnVocalAlign: $('btnVocalAlign'),
+  btnVocalPractice: $('btnVocalPractice'),
+  vocalStatus: $('vocalStatus'),
+  vocalResultWrap: $('vocalResultWrap'),
+  vocalSummary: $('vocalSummary'),
+  vocalResultList: $('vocalResultList'),
+
   drawerMask: $('drawerMask'),
   settingsDrawer: $('settingsDrawer'),
   helpMask: $('helpMask'),
@@ -290,7 +309,12 @@ function selectTrack(id) {
   renderHistogram();
   updateRangeLabel();
 
-  updateHint();
+  // 切歌时清掉教唱会话状态（保留已存盘 vocalRef 在 track 上，切回来还能用）
+  S.vocalMode = t.kind === 'custom' && (t.refData?.source === 'vocal' || t.vocalRef);
+  S.refVocal = t.vocalRef ? restoreVocalRef(t.vocalRef) : null;
+  S.lyricUnits = t.vocalUnits || null;
+  S.vocalStep = S.refVocal ? 'align' : 'idle';
+  updateVocalUI();
   updateLyricsUI();
   el.btnPlay.disabled = !t;
   el.btnPlay.querySelector('.ico').textContent = '▶';
@@ -587,6 +611,20 @@ async function stopRecording() {
     return;
   }
 
+  // —— 教唱工作流：录入参考 / 清唱跟练 都走这里，不进普通复盘 ——
+  if (S.vocalStep === 'analyze') {
+    el.btnRec.classList.remove('on');
+    el.btnRec.innerHTML = '<span class="ico">⏺</span> 开始录音';
+    await commitVocalCapture(result || { blob: null, duration: 0, frames: [] }, frames);
+    return;
+  }
+  if (S.vocalStep === 'practice') {
+    el.btnRec.classList.remove('on');
+    el.btnRec.innerHTML = '<span class="ico">⏺</span> 开始录音';
+    commitPractice(result || { blob: null, duration: 0, frames: [] }, frames);
+    return;
+  }
+
   await saveCurrentTake(result || { blob: null, duration: 0 }, frames);
 }
 
@@ -822,6 +860,15 @@ function sampleOnce() {
     // 动态歌词：跟着歌曲时间走
     updateLyricsDisplay(Math.max(0, songT - latency));
   } else {
+    // 教唱清唱跟练：没有参考音频，用"开口至今的真实时间"作为时间轴，
+    // 让逐字参考条跟着唱到的位置走。
+    if (S.vocalStep === 'practice') {
+      const wall = S.recording ? (S.recOrigin?.wall ?? performance.now()) : (S.vocalStartWall ?? performance.now());
+      if (S.vocalStartWall == null) S.vocalStartWall = wall;
+      const vt = (performance.now() - S.vocalStartWall) / 1000;
+      updateVocalPracticeDisplay(vt);
+      el.rollTimecode.textContent = '清唱 ' + fmtTime(Math.max(0, vt));
+    }
     // 没在播放：自由练唱 / 当调音器，轨迹按真实时间滚
     const t = performance.now() / 1000;
     roll.live = { t, midi: frame.voiced ? frame.midi : 0, voiced: frame.voiced, band };
@@ -1324,6 +1371,7 @@ async function handleFile(file) {
   try {
     const track = await buildTrackFromBlob(file, {
       title,
+      mode: el.importMode.value,
       range: el.importRange.value,
       snap: el.importSnap.checked,
       onProgress: (p, msg) => {
@@ -1399,11 +1447,12 @@ async function buildTrackFromBlob(file, opts = {}) {
     aggressive: isLive || opts.aggressive === true,
   });
 
+  const isVocal = opts.mode === 'hum';
   const ref = referenceFromFrames(cleaned, {
     title: name,
     hop: 0.02,
     snap: opts.snap !== false,
-    source: 'audio',
+    source: isVocal ? 'vocal' : 'audio',
   });
 
   if (ref.voicedRatio < 0.04) {
@@ -1411,7 +1460,7 @@ async function buildTrackFromBlob(file, opts = {}) {
   }
 
   report(1, '完成');
-  return {
+  const track = {
     id: uid('track'),
     kind: 'custom',
     title: name,
@@ -1422,6 +1471,19 @@ async function buildTrackFromBlob(file, opts = {}) {
     refData: packReference(ref),
     audioBlob: file,
   };
+  // 清唱 / 哼唱模式：导入的就是"参考人声"，直接进入教唱流程
+  if (isVocal) {
+    track.vocalRef = {
+      duration: ref.duration,
+      hop: ref.hop,
+      midi: Array.from(ref.midi),
+      voiced: Array.from(ref.voiced),
+      notes: ref.notes,
+      source: 'vocal',
+    };
+    track.subtitle = `参考人声 · ${fmtTime(ref.duration)} · 可作教唱`;
+  }
+  return track;
 }
 
 function finishImport(track) {
@@ -1950,6 +2012,224 @@ async function clearLyrics() {
   toast('已清除', '', 1500);
 }
 
+/* ══════════════════════ 教唱工作流（录入参考人声 → 清唱跟练）══════════════════════ */
+
+/** 教唱清唱跟练时的逐字参考条显示（用清唱真实时间轴） */
+function updateVocalPracticeDisplay(vt) {
+  if (!S.lyricUnits || !S.lyricUnits.length) return;
+  const units = S.lyricUnits;
+  let curIdx = -1;
+  for (let i = 0; i < units.length; i++) {
+    if (vt >= units[i].start && vt < units[i].end) { curIdx = i; break; }
+  }
+  if (curIdx < 0) {
+    for (let i = 0; i < units.length; i++) {
+      if (vt < units[i].start) { curIdx = i; break; }
+    }
+  }
+  const cur = units[curIdx] || units[units.length - 1];
+  const prev = units[curIdx - 1];
+  const next = units[curIdx + 1];
+  if (el.lyricsStrip) {
+    el.lyricsStrip.hidden = false;
+    el.lyrPrev.textContent = prev ? prev.char : '';
+    el.lyrCurText.textContent = cur ? (cur.char + (cur.midi != null ? ` (${midiToName(cur.midi)})` : '')) : '—';
+    el.lyrNext.textContent = next ? next.char : '';
+    let prog = 0;
+    if (cur && vt >= cur.start && cur.end > cur.start) {
+      prog = Math.max(0, Math.min(1, (vt - cur.start) / (cur.end - cur.start)));
+    }
+    if (el.lyrProgressFill) el.lyrProgressFill.style.width = (prog * 100).toFixed(1) + '%';
+  }
+}
+
+/**
+ * 把一段纯人声录音解析成"参考旋律 + 逐字谱子"
+ * @param {Blob} blob 参考人声录音（webm/opus 等，来自 TakeRecorder）
+ * @param {Array} frames 并行记录的音高帧 {t,midi,voiced,rms}
+ * @param {string} title
+ */
+async function buildVocalRef(blob, frames, title) {
+  el.vocalStatus.textContent = '正在解析参考人声的旋律…';
+  // 优先用离线重分析整段录音（更稳），没有可用时退回实时帧
+  let analyzed = null;
+  if (blob && blob.size) {
+    try {
+      const ctx = await S.engine.ensureContext();
+      const buffer = await blob.arrayBuffer().then((ab) => ctx.decodeAudioData(ab));
+      const fr = await analyzeBuffer(ctx, buffer, { hopSec: 0.01, minConfidence: 0.4, progress: (p) => {
+        if (p < 1) el.vocalStatus.textContent = `解析旋律 ${Math.round(p * 100)}%`;
+      } });
+      analyzed = fr;
+    } catch (e) {
+      console.warn('离线解析失败，用实时帧', e);
+    }
+  }
+  const src = (analyzed && analyzed.length ? analyzed : frames);
+  const { ref, notes } = analyzeVocal(src, { title, snap: true, snapAmount: 0.55 });
+  return { ref, notes, frames: src };
+}
+
+/**
+ * 把当前曲目的歌词对齐到参考人声，产出逐字谱子
+ */
+function alignCurrentLyricsToVocal() {
+  const ly = currentLyrics();
+  if (!ly || !ly.text || !S.refVocal) {
+    toast('先录入参考人声，并准备好歌词', 'err');
+    return null;
+  }
+  const units = alignLyricsToVocal(ly.text, S.refVocal.ref, S.refVocal.ref.duration);
+  S.lyricUnits = units;
+  return units;
+}
+
+/**
+ * 步骤1：录入参考人声（从一次录音结果建立 vocalRef）
+ * 复用 startRecording/stopRecording 的 TakeRecorder 产物。
+ */
+async function startVocalCapture() {
+  if (!S.track) { toast('先选一首歌（或新建一条教唱）', 'err'); return; }
+  S.vocalMode = true;
+  S.vocalStep = 'analyze';
+  updateVocalUI();
+  toast('请清唱/朗读这一段的纯人声，录完点「停止录音」', 'ok', 3000);
+  // 确保麦克风在录
+  if (!S.micOn) { await enableMic(); if (!S.micOn) return; }
+  await startRecording();
+}
+
+/**
+ * 在录音结束后把这次录音转成参考人声
+ * （由 stopRecording 链条调用：若本次处于 vocalStep==='analyze'）
+ */
+async function commitVocalCapture(blob, frames) {
+  const v = await buildVocalRef(blob, frames, S.track?.title || '参考人声');
+  S.refVocal = v;
+  S.ref = v.ref;
+  S.vocalStep = 'align';
+  roll.setReference(v.ref);
+  applyTransposeToView();
+  updateRangeLabel();
+  updateVocalUI();
+  el.vocalStatus.textContent = `✓ 已解析 ${v.notes.length} 个音 · 时长 ${fmtTime(v.ref.duration)}。现在填歌词或自动找歌词，然后点「对齐歌词」。`;
+  toast('参考人声解析完成', 'ok');
+  // 持久化到 track（存不下 blob 本身，但存解析结构）
+  await persistVocalRef();
+}
+
+/** 把 vocalRef / lyricUnits 序列化进当前 track 并存库 */
+async function persistVocalRef() {
+  if (!S.track || S.track.kind !== 'custom') return;
+  const t = S.customTracks.find((x) => x.id === S.track.id);
+  if (!t) return;
+  if (S.refVocal) {
+    t.vocalRef = {
+      duration: S.refVocal.ref.duration,
+      hop: S.refVocal.ref.hop,
+      midi: Array.from(S.refVocal.ref.midi),
+      voiced: Array.from(S.refVocal.ref.voiced),
+      notes: S.refVocal.notes,
+      source: 'vocal',
+    };
+  }
+  if (S.lyricUnits) {
+    t.vocalUnits = S.lyricUnits.map((u) => ({
+      char: u.char, start: u.start, end: u.end, midi: u.midi,
+      lineIndex: u.lineIndex, isRest: u.isRest,
+    }));
+  }
+  await addTrack(t);
+  renderAllTracks();
+}
+
+/**
+ * 步骤2：对齐歌词 → 进入清唱跟练
+ */
+function enterPractice() {
+  if (!S.refVocal) { toast('先录入参考人声', 'err'); return; }
+  const units = S.lyricUnits || alignCurrentLyricsToVocal();
+  if (!units || !units.length) {
+    toast('没有可用的歌词来对齐', 'err');
+    return;
+  }
+  S.lyricUnits = units;
+  S.vocalStep = 'practice';
+  S.vocalMode = true;
+  S.vocalResult = null;
+  S.vocalStartWall = null; // 在开始录音时记录
+  updateVocalUI();
+  // 自动把参考旋律铺到卷帘，并把歌词条打开，方便跟唱
+  roll.setReference(S.refVocal.ref);
+  applyTransposeToView();
+  el.lyricsStrip.hidden = !(units && units.length);
+  toast('开始清唱！唱完点「停止录音」看每个字的点评', 'ok', 3200);
+  persistVocalRef();
+}
+
+/** 清唱结束 → 逐字打分并展示 */
+function commitPractice(blob, frames) {
+  if (!S.lyricUnits) { toast('还没有对齐歌词', 'err'); return; }
+  const r = scoreVocalTake(S.lyricUnits, frames, { mode: SCORE_MODES[S.settings.scoreMode] });
+  S.vocalResult = r;
+  S.vocalStep = 'result';
+  updateVocalUI();
+  renderVocalResult(r);
+  toast(`清唱完成 · 准音率 ${Math.round(r.accuracy * 100)}%`, 'ok', 3000);
+}
+
+/** 渲染逐字点评面板 */
+function renderVocalResult(r) {
+  const wrap = el.vocalResultList;
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  for (const u of r.units) {
+    const row = document.createElement('div');
+    row.className = 'vocal-unit' + (u.status === 'missed' ? ' missed' : u.status === 'rest' ? ' rest' : ' ' + (u.band || ''));
+    const txt = u.status === 'rest' ? '（间奏）'
+      : u.status === 'missed' ? '没唱到'
+      : vocalUnitText(u, r.tol);
+    row.innerHTML = `
+      <span class="v-unit-char">${escapeHtml(u.char)}</span>
+      <span class="v-unit-pitch">${u.midi != null ? midiToName(u.midi) : '—'}</span>
+      <span class="v-unit-text">${escapeHtml(txt)}</span>
+    `;
+    wrap.appendChild(row);
+  }
+  el.vocalSummary.textContent =
+    `总分 ${r.totalScore} · 准音率 ${Math.round(r.accuracy * 100)}%`
+    + ` · 唱到 ${r.sung}/${r.total} 字`
+    + (r.missed ? ` · 漏 ${r.missed}` : '')
+    + (r.early || r.late ? ` · 早 ${r.early} / 晚 ${r.late}` : '')
+    + ` · 平均偏差 ${Math.round(r.meanAbsCents)}¢`;
+}
+
+/** 根据 vocalStep 切换各按钮/面板状态 */
+function updateVocalUI() {
+  const step = S.vocalStep;
+  const hasRef = !!S.refVocal;
+  const hasUnits = !!S.lyricUnits && S.lyricUnits.length > 0;
+  if (el.btnVocalCapture) {
+    el.btnVocalCapture.disabled = !S.track || step === 'analyze' || step === 'practice';
+    el.btnVocalCapture.textContent = hasRef ? '重新录入参考人声' : '① 录入参考人声';
+  }
+  if (el.btnVocalAlign) {
+    el.btnVocalAlign.disabled = !hasRef;
+    el.btnVocalAlign.textContent = hasUnits ? '重新对齐歌词' : '② 对齐歌词';
+  }
+  if (el.btnVocalPractice) {
+    el.btnVocalPractice.disabled = !hasUnits || step === 'analyze' || step === 'practice';
+    el.btnVocalPractice.textContent = '③ 开始清唱跟练';
+  }
+  if (el.vocalPanel) el.vocalPanel.classList.toggle('hidden', !(S.vocalMode || hasRef));
+  if (el.vocalResultWrap) el.vocalResultWrap.classList.toggle('hidden', step !== 'result');
+  if (el.vocalStatus && !el.vocalStatus.textContent) {
+    el.vocalStatus.textContent = hasRef
+      ? '已录入参考人声，填歌词后点「对齐歌词」。'
+      : '这是「教唱」模式：先录一段纯人声作为参考，再清唱跟练，逐字点评高/低、快/慢。';
+  }
+}
+
 /** 参考轨道 ↔ 可存储格式 */
 function packReference(ref) {
   return {
@@ -1976,6 +2256,25 @@ function restoreReference(track) {
     notes: d.notes,
     source: d.source,
   });
+}
+
+/** 从持久化的 vocalRef 数据还原运行期对象 */
+function restoreVocalRef(d) {
+  if (!d) return null;
+  return {
+    ref: new Reference({
+      title: '参考人声',
+      duration: d.duration,
+      hop: d.hop,
+      midi: new Float32Array(d.midi),
+      voiced: new Uint8Array(d.voiced),
+      energy: d.energy ? new Float32Array(d.energy) : null,
+      notes: d.notes,
+      source: 'vocal',
+    }),
+    notes: d.notes || [],
+    frames: [],
+  };
 }
 
 /* ══════════════════════ 渲染 ══════════════════════ */
@@ -2020,6 +2319,12 @@ function trackIssue(t) {
   if (t.kind === 'builtin') return null;
   const isMidi = t.refData?.source === 'midi';
   if (isMidi) return null;
+  // 教唱参考人声：即便没有音频 Blob（仅存了旋律），也不算失效
+  if (t.refData?.source === 'vocal' || t.vocalRef) {
+    if (t.vocalRef && t.vocalRef.midi && t.vocalRef.midi.length) return null;
+    if (!(t.audioBlob instanceof Blob)) return '音频缺失';
+    return null;
+  }
   if (!(t.audioBlob instanceof Blob)) return '音频缺失';
   if (!t.refData) return '旋律未解析';
   return null;
@@ -2396,6 +2701,7 @@ function bind() {
           try {
             const t = await buildTrackFromBlob(files[i], {
               title: files[i].name,
+              mode: el.importMode.value,
               range: el.importRange.value,
               snap: el.importSnap.checked,
             });
@@ -2500,6 +2806,11 @@ function bind() {
   }
   if (el.btnClearLyrics) {
     el.btnClearLyrics.addEventListener('click', clearLyrics);
+
+  // 教唱工作流
+  if (el.btnVocalCapture) el.btnVocalCapture.addEventListener('click', startVocalCapture);
+  if (el.btnVocalAlign) el.btnVocalAlign.addEventListener('click', () => { alignCurrentLyricsToVocal(); enterPractice(); });
+  if (el.btnVocalPractice) el.btnVocalPractice.addEventListener('click', enterPractice);
   }
 
   el.sepEnabled.addEventListener('change', () => {
@@ -2545,6 +2856,7 @@ function bind() {
           try {
             const t = await buildTrackFromBlob(files[i], {
               title: files[i].name,
+              mode: el.importMode.value,
               range: el.importRange.value,
               snap: el.importSnap.checked,
             });
@@ -2756,6 +3068,41 @@ async function init() {
       roll.setReview(S.ref.duration);
       el.rollHint.classList.add('hidden');
       roll.draw();
+    },
+    // ── 教唱工作流测试钩子 ──
+    // 注入一段参考人声帧并解析（绕过麦克风录音）
+    buildVocalRefFromFrames(frames, title = 'ref') {
+      return commitVocalCapture({ blob: null, duration: 0, frames: [] }, frames);
+    },
+    // 设置当前曲目的歌词文本（供对齐用）
+    setTestLyrics(text) {
+      if (!S.track) return false;
+      const t = S.customTracks.find((x) => x.id === S.track.id) || S.track;
+      t.lyrics = { text, synced: text.includes('['), source: 'test' };
+      S._lyrCache = null;
+      updateLyricsUI();
+      return true;
+    },
+    // 注入清唱帧并评分（绕过麦克风录音）
+    scorePracticeFromFrames(frames) {
+      if (!S.lyricUnits) return null;
+      commitPractice({ blob: null, duration: 0, frames: [] }, frames);
+      return S.vocalResult;
+    },
+    getVocalState() {
+      return {
+        step: S.vocalStep,
+        hasRef: !!S.refVocal,
+        hasUnits: !!(S.lyricUnits && S.lyricUnits.length),
+        units: S.lyricUnits,
+        result: S.vocalResult,
+        btnCapture: el.btnVocalCapture?.textContent,
+        btnAlign: el.btnVocalAlign?.textContent,
+        btnPractice: el.btnVocalPractice?.textContent,
+        panelHidden: el.vocalPanel?.classList.contains('hidden'),
+        resultHidden: el.vocalResultWrap?.classList.contains('hidden'),
+        summary: el.vocalSummary?.textContent,
+      };
     },
   };
   console.log('[PitchCoach] ready');
