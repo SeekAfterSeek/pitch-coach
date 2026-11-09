@@ -183,8 +183,15 @@ body {
   font: 15px/2 "PingFang SC", "Microsoft YaHei", monospace; letter-spacing: 2px;
 }
 .lyric-editor:focus { outline: none; border-color: rgba(37,224,138,.55); }
+.lyric-tools { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.lyric-status { font-size: 11px; color: var(--text-3); }
+.lyric-status.ok { color: var(--green); }
+.lyric-status.err { color: var(--red); }
 
 .jp-sheet { border-radius: 9px; border: 1px solid var(--line); background: #0a1119; padding: 12px 14px; }
+.jp-nudge { font-size: 11px; color: var(--yellow); vertical-align: super; margin-left: 1px; }
+.jp-legend { font-size: 10.5px; color: var(--text-3); margin-top: 8px; }
+.jp-legend b { color: var(--cyan); }
 .jp-line { padding: 8px 0; border-bottom: 1px dashed var(--line); }
 .jp-line:last-child { border-bottom: 0; }
 .jp-row { display: flex; flex-wrap: wrap; gap: 6px; }

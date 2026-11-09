@@ -15,9 +15,12 @@
 import { AudioEngine, TakeRecorder, decodeFile, analyzeBuffer } from './audio.js';
 import { parseVocal } from './compare.js';
 import {
-  detectKey, buildScore, flattenScore, jianpuHtml, placeholderLyrics, groupPhrases,
+  detectKey, buildScore, flattenScore, jianpuHtml, jianpuTitle,
+  placeholderLyrics, groupPhrases,
 } from './notation.js';
 import { scorePracticeWords, groupWordsByLine, lineSummary } from './practice.js';
+import { alignTextToPhrases } from './lyrics.js';
+import { startSpeech, speechAvailable } from './speech.js';
 import { uid, fmtTime, clamp } from './util.js';
 import {
   saveVocal, listVocals, getVocal, getVocalAudio,
@@ -41,6 +44,10 @@ const S = {
   key: null,            // detectKey 结果
   lyricText: '',        // 用户编辑的歌词（按行）
   score: null,          // buildScore 结果（逐字谱）
+  lyricsDraft: '',      // 编辑框里的草稿（未确定）
+  lyricsConfirmed: false,
+  speech: null,         // 录音期间的语音识别控制器
+  speechText: '',       // 本轮识别到的歌词文本
 
   lastPractice: null,   // { words, byLine, summary }
   lastPair: { a: null, b: null },
@@ -65,7 +72,8 @@ function cacheEls() {
     'recordStrip','recDot','recLabel','recTimer','micMeter','btnStopRec',
     'parseStrip','parseTitle','parseSub','parseBar',
     'parsedCard','parsedBadge','parsedTitle','parsedKey','keyName','keyJianpu',
-    'lyricEditor','parsedBlock','scoreInfo','jpSheet','btnPractice','btnRerecord',
+    'lyricEditor','btnRecognize','btnConfirmLyrics','lyricStatus',
+    'scoreInfo','jpSheet','btnPractice','btnRerecord',
     'karaoke','kCount','kPrevLine','kCurLine','kNextLine','kProgressFill','kHint',
     'resultWrap','resultTitle','resultSub','btnPlayA','btnPlayB','btnStopAudio','btnAgain',
     'lyricResult',
@@ -150,6 +158,15 @@ async function startRecording(kind) {
   S.phase = kind === 'ref' ? 'rec-ref' : 'rec-practice';
   setStep(kind === 'ref' ? 1 : 3);
 
+  // 录参考人声时并行开语音识别，自动取到歌词
+  if (kind === 'ref' && speechAvailable()) {
+    S.speechText = '';
+    S.speech = startSpeech({
+      onPartial: (t) => { S.speechText = t; },
+      onError: () => { /* 识别不到没关系，用户手动填 */ },
+    });
+  }
+
   if (kind === 'practice') {
     // 进入练唱：先 3-2-1 倒计时，再开始逐字卡拉OK + 录音
     startCountdown(() => loop());
@@ -217,7 +234,7 @@ function updateKaraoke(vt) {
     if (!line) return '';
     return line.units.map((u) => {
       const on = active && vt >= u.start && vt < u.end;
-      return `<span class="k-unit${on ? ' on' : ''}${vt > u.end ? ' done' : ''}">
+      return `<span class="k-unit${on ? ' on' : ''}${vt > u.end ? ' done' : ''}" title="${escapeHtml(jianpuTitle(u.jianpu))}">
         <span class="k-jp">${jianpuHtml(u.jianpu)}</span>
         <span class="k-beat">${escapeHtml(u.beat)}</span>
         <span class="k-char">${escapeHtml(u.char || '○')}</span>
@@ -249,6 +266,12 @@ async function stopRecording() {
   const rec = S.recorder;
   S.recorder = null;
   const out = await rec.stop();
+  // 收掉语音识别，拿到这一轮识别到的歌词
+  if (S.speech) {
+    const t = S.speech.stop();
+    if (t) S.speechText = t;
+    S.speech = null;
+  }
   show(el.recordStrip, false);
   show(el.karaoke, false);
   const frames = normalizeFrames(out.frames);
@@ -293,24 +316,40 @@ async function commitReference(blob, frames) {
   S.parsed = parsed;
   S.key = detectKey(parsed.notes);
   const phrases = groupPhrases(parsed.notes);
-  S.lyricText = placeholderLyrics(phrases);   // ○ 占位，用户可编辑
+  const counts = phrases.map((p) => p.length);
+  // 优先用语音识别到的歌词自动逐句填；识别不到才退回占位符
+  let draft = placeholderLyrics(phrases);
+  let status = '未识别到歌词，用占位符 ○ 也能先练，或直接改上面文字';
+  let statusKind = '';
+  if (S.speechText && S.speechText.trim()) {
+    draft = alignTextToPhrases(S.speechText, counts);
+    status = '已自动识别歌词，请核对/修改，然后点「确定歌词」';
+    statusKind = 'ok';
+  }
+  S.lyricText = draft;
+  S.lyricsDraft = draft;
+  S.lyricsConfirmed = false;
   S.score = buildScore(parsed.notes, S.key, S.lyricText);
   S.lastPair.a = rec.id;
-  renderParsedCard();
+  renderParsedCard(status, statusKind);
   S.phase = 'ready';
   setStep(3);
 }
 
 /** 解析卡：只渲染 ① 调性 ② 歌词编辑器 ③ 简谱 */
-function renderParsedCard() {
+function renderParsedCard(status, statusKind = '') {
   el.keyName.textContent = S.key.name;
   el.keyJianpu.textContent = S.key.jianpuKey + ' · ' + S.score.bpm + ' BPM';
   el.lyricEditor.value = S.lyricText;
   el.scoreInfo.textContent = `${S.key.jianpuKey} · ${S.score.noteCount} 个音 · ${S.score.lines.length} 句`;
+  el.lyricStatus.textContent = status || '改完歌词点「确定歌词」，练唱时就显示真实歌词';
+  el.lyricStatus.className = 'lyric-status' + (statusKind ? ' ' + statusKind : '');
+  el.btnRecognize.disabled = !speechAvailable();
+  if (!speechAvailable()) el.btnRecognize.title = '此浏览器不支持语音识别，请手动填写';
   renderJianpuSheet();
   el.heroIcon.textContent = '🎼';
   el.heroTitle.textContent = '解析完成';
-  el.heroDesc.textContent = '确认调性、填好歌词、看懂简谱，然后点「练唱开始」。';
+  el.heroDesc.textContent = '核对歌词、看懂简谱（数字 1–7，↑↓ 是半音），然后点「确定歌词」再练唱。';
   show(el.parsedCard, true);
   show(el.stageActions, false);
 }
@@ -321,17 +360,52 @@ function renderJianpuSheet() {
   el.jpSheet.innerHTML = s.lines.map((line) => `
     <div class="jp-line">
       <div class="jp-row jp-notes">${line.units.map((u) =>
-        `<span class="jp-cell"><span class="jp-note">${jianpuHtml(u.jianpu)}</span><span class="jp-beat">${escapeHtml(u.beat)}</span></span>`).join('')}</div>
+        `<span class="jp-cell" title="${escapeHtml(jianpuTitle(u.jianpu))}"><span class="jp-note">${jianpuHtml(u.jianpu)}</span><span class="jp-beat">${escapeHtml(u.beat)}</span></span>`).join('')}</div>
       <div class="jp-row jp-lyric">${line.units.map((u) => `<span class="jp-ch">${escapeHtml(u.char || '○')}</span>`).join('')}</div>
     </div>`).join('');
 }
 
-/** 用户编辑歌词 → 重建逐字谱 + 简谱表（实时） */
+/** 用户编辑歌词 → 更新草稿 + 实时重排简谱（尚未确定） */
 function onLyricEdit() {
-  S.lyricText = el.lyricEditor.value;
+  S.lyricsDraft = el.lyricEditor.value;
+  S.lyricsConfirmed = false;
+  el.lyricStatus.textContent = '歌词已修改，点「确定歌词」生效';
+  el.lyricStatus.className = 'lyric-status';
+  // 实时预览：用草稿重建谱子，让简谱下面的歌词跟着变
+  S.score = buildScore(S.parsed.notes, S.key, S.lyricsDraft);
+  renderJianpuSheet();
+}
+
+/** 「确定歌词」：把草稿正式写入，重建逐字谱（练唱/结果都用它） */
+function confirmLyrics() {
+  if (!S.parsed || !S.key) return;
+  S.lyricText = S.lyricsDraft;
+  S.lyricsConfirmed = true;
   S.score = buildScore(S.parsed.notes, S.key, S.lyricText);
   renderJianpuSheet();
   el.scoreInfo.textContent = `${S.key.jianpuKey} · ${S.score.noteCount} 个音 · ${S.score.lines.length} 句`;
+  el.lyricStatus.textContent = '✓ 歌词已确定，练唱时显示这些字';
+  el.lyricStatus.className = 'lyric-status ok';
+  toast('歌词已确定', 'ok');
+}
+
+/** 「识别歌词」：重新识别一遍（复用最近一次参考录音期间的识别文本；
+ *  若没有则提示用户可重录参考，或直接在框里改） */
+function recognizeLyrics() {
+  if (!speechAvailable()) { toast('此浏览器不支持语音识别，请手动填写歌词', 'err'); return; }
+  const phrases = S.parsed ? groupPhrases(S.parsed.notes) : [];
+  const counts = phrases.map((p) => p.length);
+  if (S.speechText && S.speechText.trim()) {
+    const aligned = alignTextToPhrases(S.speechText, counts);
+    el.lyricEditor.value = aligned;
+    S.lyricsDraft = aligned;
+    onLyricEdit();
+    el.lyricStatus.textContent = '已用录音时识别到的歌词自动填入，请核对后点「确定歌词」';
+    el.lyricStatus.className = 'lyric-status ok';
+    toast('已填入识别到的歌词', 'ok');
+    return;
+  }
+  toast('这一段没识别到歌词，直接手动填即可；也可「重录参考」再试', '', 4500);
 }
 
 function showParse(title, sub) {
@@ -396,8 +470,10 @@ function renderResult() {
   el.heroDesc.textContent = '下面是整篇歌词；每个字上排是原唱简谱、下排是你唱的简谱。';
 
   const st = S.lastPractice.summary;
+  const al = S.lastPractice.align;
   el.resultTitle.textContent = '这一遍唱得怎么样';
-  el.resultSub.textContent = `共 ${st.total} 字 · 唱到 ${st.sung} · 偏高 ${st.high} · 偏低 ${st.low} · 偏快 ${st.early} · 偏慢 ${st.late} · 没唱到 ${st.missed}`;
+  el.resultSub.textContent = `共 ${st.total} 字 · 唱到 ${st.sung} · 偏高 ${st.high} · 偏低 ${st.low} · 偏快 ${st.early} · 偏慢 ${st.late} · 没唱到 ${st.missed}`
+    + (al?.aligned ? ` · 已自动对齐 ${Math.round(-al.shift * 1000)}ms` : '');
   el.btnPlayA.disabled = !S.lastPair.a;
   el.btnPlayB.disabled = !S.lastPair.b;
 
@@ -503,13 +579,17 @@ async function comparePair() {
   if (parsed.silent) { hideParse(); toast('A 参考几乎没检测到人声', 'err'); return; }
   const key = detectKey(parsed.notes);
   const phrases = groupPhrases(parsed.notes);
-  const lyricText = placeholderLyrics(phrases);
+  const counts = phrases.map((p) => p.length);
+  // 若 A 就是当前参考且已确定歌词，沿用真实歌词；否则用占位符
+  const lyricText = (a === S.refVocal?.id && S.lyricsConfirmed && S.lyricText)
+    ? alignTextToPhrases(S.lyricText, counts)
+    : placeholderLyrics(phrases);
   const score = buildScore(parsed.notes, key, lyricText);
   const r = scorePracticeWords(flattenScore(score), key, vb.frames, { tol: S.tol });
 
   await animateParse();
   hideParse();
-  S.lastPractice = { ...r, byLine: groupWordsByLine(r.words) };
+  S.lastPractice = { ...r, byLine: groupWordsByLine(r.words), align: r.align };
   S.lastPair = { a, b };
   S.refVocal = va; S.parsed = parsed; S.key = key; S.score = score; S.lyricText = lyricText;
   renderResult();
@@ -572,6 +652,7 @@ function playBlob(blob) {
 function resetToIdle() {
   S.phase = 'idle';
   S.refVocal = null; S.parsed = null; S.key = null; S.score = null; S.lyricText = '';
+  S.lyricsDraft = ''; S.lyricsConfirmed = false; S.speechText = ''; S.speech = null;
   setStep(1);
   el.heroIcon.textContent = '🎤';
   el.heroTitle.textContent = '先录一段纯人声';
@@ -593,6 +674,12 @@ function bind() {
   el.btnStopRec.addEventListener('click', () => stopRecording().catch((e) => toast('录音处理失败：' + e.message, 'err', 6000)));
   el.btnPractice.addEventListener('click', () => {
     if (!S.parsed || !S.score) { toast('请先录入参考人声', 'err'); return; }
+    // 没点「确定歌词」也直接开练：以编辑框当前内容为准自动确定
+    if (!S.lyricsConfirmed && el.lyricEditor.value !== S.lyricText) {
+      S.lyricText = el.lyricEditor.value;
+      S.score = buildScore(S.parsed.notes, S.key, S.lyricText);
+      S.lyricsConfirmed = true;
+    }
     startRecording('practice').catch(() => {});
   });
   el.btnRerecord.addEventListener('click', () => startRecording('ref').catch(() => {}));
@@ -601,8 +688,10 @@ function bind() {
     startRecording('practice').catch(() => {});
   });
 
-  // 歌词编辑 → 实时重建逐字谱
+  // 歌词：编辑 → 实时预览；识别 → 自动填；确定 → 正式生效
   el.lyricEditor.addEventListener('input', onLyricEdit);
+  el.btnRecognize.addEventListener('click', recognizeLyrics);
+  el.btnConfirmLyrics.addEventListener('click', confirmLyrics);
 
   el.btnPlayA.addEventListener('click', () => S.lastPair.a && playVocal(S.lastPair.a));
   el.btnPlayB.addEventListener('click', () => S.lastPair.b && playVocal(S.lastPair.b));
@@ -640,6 +729,15 @@ function installTestHooks() {
       return { phase: S.phase, key: S.key, score: S.score, lyricText: S.lyricText };
     },
     setLyrics(text) { if (el.lyricEditor) { el.lyricEditor.value = text; onLyricEdit(); } return S.score; },
+    confirmLyrics() { confirmLyrics(); return { text: S.lyricText, confirmed: S.lyricsConfirmed }; },
+    // 模拟"录音时识别到歌词"：注入识别文本并重建解析卡
+    setRecognizedLyrics(text) {
+      S.speechText = text;
+      el.lyricEditor.value = alignTextToPhrases(text, groupPhrases(S.parsed.notes).map((p) => p.length));
+      onLyricEdit();
+      return el.lyricEditor.value;
+    },
+    speechAvailable,
     // 预览 K 歌视图（不依赖麦克风）：显示倒计时，并把指定时刻的逐字高亮画出来
     previewKaraoke(atSec = 0.2) {
       show(el.parsedCard, false);
@@ -669,12 +767,16 @@ function installTestHooks() {
         resultHidden: el.resultWrap.classList.contains('hidden'),
         karaokeHidden: el.karaoke.classList.contains('hidden'),
         keyName: el.keyName.textContent, lyricEditorValue: el.lyricEditor.value,
+        lyricStatus: el.lyricStatus.textContent, lyricsConfirmed: S.lyricsConfirmed,
+        hasRecognizeBtn: !!el.btnRecognize, hasConfirmBtn: !!el.btnConfirmLyrics,
+        jpLegend: (document.querySelector('.jp-legend') || {}).textContent,
         jpSheet: el.jpSheet.textContent.trim(), jpCells: el.jpSheet.querySelectorAll('.jp-cell').length,
         resultText: el.lyricResult.textContent.trim(),
         lrCells: el.lyricResult.querySelectorAll('.lr-cell').length,
         lrLines: el.lyricResult.querySelectorAll('.lr-line').length,
         historyCount: S.history.length,
         practiceSummary: S.lastPractice?.summary,
+        practiceAlign: S.lastPractice?.align,
       };
     },
     listHistory: () => S.history,

@@ -284,3 +284,62 @@ export function distributeByLines(plainText, duration) {
   }
   return out;
 }
+
+/* ────────────── 歌词识别结果 → 逐句歌词 ────────────── */
+
+/** 去掉标点、空白、语气拖音，只留可唱字符 */
+export function cleanLyricChars(text) {
+  return [...String(text || '')].filter((c) => !/^[\s\p{P}\p{S}]+$/u.test(c));
+}
+
+/**
+ * 把一段识别出来的连续文本，按"乐句数 / 每句音符数"分配成逐行歌词。
+ *
+ * 例：谱子分 2 句、音符数 [4,3]，识别到「一闪一闪亮晶晶」7 字
+ *     → ['一闪一闪', '亮晶晶']（正好一字一音符，用户可在框里改）
+ *
+ * 策略：
+ *  - 用户若自己按行写了文本，优先按用户分行
+ *  - 否则按每句音符数比例切分连续文本
+ *  - 字数与音符数不齐：多了并进末字、少了补 ○
+ *
+ * @param {string} text 识别/粘贴的文本
+ * @param {Array<number>} lineNoteCounts 每句的音符数
+ * @returns {string} 逐行歌词文本（\n 分隔）
+ */
+export function alignTextToPhrases(text, lineNoteCounts) {
+  const counts = lineNoteCounts || [];
+  if (!counts.length) return '';
+  const userLines = String(text || '').replace(/\r\n?/g, '\n').split('\n').map((x) => x.trim()).filter((x) => x && !/^[○\s]+$/.test(x));
+
+  let chunks;
+  if (userLines.length >= counts.length) {
+    // 用户已按行写：取前 N 行
+    chunks = userLines.slice(0, counts.length);
+  } else {
+    // 连续文本：按每句音符数比例切
+    const chars = cleanLyricChars(text);
+    chunks = [];
+    let ci = 0;
+    const total = counts.reduce((a, b) => a + b, 0) || 1;
+    for (let i = 0; i < counts.length; i++) {
+      let take = Math.max(1, Math.round((counts[i] / total) * chars.length));
+      if (i === counts.length - 1) take = chars.length - ci; // 末句吃掉余数
+      take = Math.min(take, Math.max(0, chars.length - ci));
+      chunks.push(chars.slice(ci, ci + take).join(''));
+      ci += take;
+    }
+  }
+
+  // 每行补齐/截断到该句音符数
+  return chunks.map((line, i) => {
+    const cs = cleanLyricChars(line);
+    const n = counts[i];
+    const out = [];
+    for (let j = 0; j < n; j++) {
+      if (j === n - 1) out.push(cs.slice(j).join('') || '○');
+      else out.push(cs[j] ?? '○');
+    }
+    return out.join('');
+  }).join('\n');
+}

@@ -67,7 +67,14 @@ console.log('\n── notesToJianpu 简谱 ──');
   ok('B=7', jp[6].digit === '7', jp[6].symbol);
   ok('高八度 C5 → 1 带高点', notesToJianpu(N([[72,0,0.5]]), key)[0].octave === 1, JSON.stringify(notesToJianpu(N([[72,0,0.5]]), key)[0]));
   ok('低八度 C3 → 1 带低点', notesToJianpu(N([[48,0,0.5]]), key)[0].octave === -1);
-  ok('半音 → #1', notesToJianpu(N([[61,0,0.5]]), key)[0].digit === '1' && notesToJianpu(N([[61,0,0.5]]), key)[0].accidental === '#');
+  ok('半音 → 1↑（数字+箭头，无字母）', (() => {
+    const s = notesToJianpu(N([[61,0,0.5]]), key)[0];
+    return s.digit === '1' && s.nudge === '↑' && s.symbol === '1↑' && !/[a-zA-Zb#]/.test(s.symbol);
+  })());
+  ok('b6 类变化音 → 6↓', (() => {
+    const s = notesToJianpu(N([[68,0,0.5]]), key)[0]; // 相对 C：A♭/G# → 6↓
+    return s.symbol.includes('↓') && !/[a-zA-Zb#]/.test(s.symbol);
+  })());
 }
 
 console.log('\n── groupPhrases 乐句切分 ──');

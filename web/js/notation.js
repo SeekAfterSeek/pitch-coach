@@ -88,11 +88,13 @@ export function detectKey(notes) {
   };
 }
 
-// 相对「1(do)」的 12 个半音 → 简谱数字 + 升降号
+// 相对「1(do)」的 12 个半音 → 纯数字唱名 + 直观的半音箭头
+// 不用 b6 / #4 这类字母（用户看不懂），改用「数字 + ↑/↓」表示比该音高/低半音。
+// 例：b6 → 6↓、#4 → 4↑、#1 → 1↑。八度高低仍用 ˙ / . 点表示。
 const DEGREE = [
-  { d: '1' }, { d: '#1' }, { d: '2' }, { d: 'b3' },
-  { d: '3' }, { d: '4' }, { d: '#4' }, { d: '5' },
-  { d: 'b6' }, { d: '6' }, { d: 'b7' }, { d: '7' },
+  { d: '1' }, { d: '1', nudge: '↑' }, { d: '2' }, { d: '3', nudge: '↓' },
+  { d: '3' }, { d: '4' }, { d: '4', nudge: '↑' }, { d: '5' },
+  { d: '6', nudge: '↓' }, { d: '6' }, { d: '7', nudge: '↓' }, { d: '7' },
 ];
 
 // 1 2 3 4 5 6 7 各自相对 do 的半音数（用于求八度）
@@ -105,22 +107,33 @@ function midiToJianpuCore(midi, doPc) {
   const q = Math.round(midi);
   const rel = ((q - doPc) % 12 + 12) % 12;      // 相对 do 的半音级
   const deg = DEGREE[rel];
-  const accidental = deg.d[0] === '#' || deg.d[0] === 'b' ? deg.d[0] : '';
-  const digit = accidental ? deg.d.slice(1) : deg.d;
+  const digit = deg.d;
+  const nudge = deg.nudge || '';                 // ↑ / ↓ / ''
   const digitSemi = DEGREE_SEMI[Number(digit) - 1] ?? 0;
-  // 变化音的半音要跟着升降号修正
-  const semi = digitSemi + (accidental === '#' ? 1 : accidental === 'b' ? -1 : 0);
+  // 变化音的半音跟着箭头修正
+  const semi = digitSemi + (nudge === '↑' ? 1 : nudge === '↓' ? -1 : 0);
   const baseMidi = doMidi + semi;
   // 以「do 所在八度」为 0，用 ±6 半音容差判定八度点
   const octave = Math.floor((q - baseMidi + 6) / 12);
   const dots = octave > 0 ? '˙'.repeat(Math.min(3, octave))
     : octave < 0 ? '̣'.repeat(Math.min(3, -octave)) : '';
   return {
-    digit, accidental, octave,
-    symbol: accidental + digit + dots,
+    digit, nudge, octave,
+    // 纯数字 + 直观箭头 + 八度点，无字母
+    symbol: digit + nudge + dots,
     dotted: dots,
+    // 兼容旧字段
+    accidental: '',
     midi,
   };
+}
+
+/** 一个简谱符号的可读中文说明（用于 tooltip） */
+export function jianpuTitle(sym) {
+  if (!sym) return '';
+  const oct = sym.octave > 0 ? '高' + sym.octave + '个八度' : sym.octave < 0 ? '低' + (-sym.octave) + '个八度' : '中音区';
+  const half = sym.nudge === '↑' ? '，偏高半音' : sym.nudge === '↓' ? '，偏低半音' : '';
+  return `${sym.digit} ${oct}${half}`;
 }
 
 /**
@@ -266,11 +279,12 @@ export function buildScore(notes, key, lyricText, opts = {}) {
   };
 }
 
-/** 简谱符号的 HTML 片段（八度点画在数字上/下方） */
+/** 简谱符号的 HTML 片段（八度点画在数字上/下方，半音用 ↑↓ 角标） */
 export function jianpuHtml(sym) {
   const up = sym.octave > 0 ? `<sup class="jp-dots">${'˙'.repeat(Math.min(3, sym.octave))}</sup>` : '';
   const down = sym.octave < 0 ? `<sub class="jp-dots">${'.'.repeat(Math.min(3, -sym.octave))}</sub>` : '';
-  return `${sym.accidental || ''}${sym.digit}${up}${down}`;
+  const nudge = sym.nudge ? `<span class="jp-nudge">${sym.nudge}</span>` : '';
+  return `${sym.digit}${nudge}${up}${down}`;
 }
 
 /**

@@ -2,7 +2,7 @@
  * practice.js 单元自测：逐字对比（原唱简谱 / 我唱简谱 / 高低 / 快慢 / 漏唱）
  */
 import { detectKey, buildScore, flattenScore } from '../web/js/notation.js';
-import { scorePracticeWords, groupWordsByLine, lineSummary, practiceBand } from '../web/js/practice.js';
+import { scorePracticeWords, groupWordsByLine, lineSummary, practiceBand, estimatePracticeOffset } from '../web/js/practice.js';
 
 let passed = 0, failed = 0;
 function ok(name, cond, extra = '') {
@@ -71,13 +71,26 @@ console.log('\n── 漏唱后半句 ──');
   ok('漏唱字 text=没唱到', r.words[6].text === '没唱到', r.words[6].text);
 }
 
-console.log('\n── 快 / 慢 ──');
+console.log('\n── 自动时间对齐（修复"全没唱到"） ──');
+{
+  // 整段晚开口 0.8s：不该判成全漏唱，对齐后应该基本全唱到
+  const delayed = F([[60,0.8,1.3],[62,1.3,1.8],[64,1.8,2.3],[65,2.3,2.8],[67,3.8,4.3],[69,4.3,4.8],[71,4.8,5.3]]);
+  const off = estimatePracticeOffset(units, delayed);
+  ok('估计出接近 -0.8s 的偏移', Math.abs(off.shift + 0.8) < 0.15, JSON.stringify(off));
+  ok('对齐可用', off.aligned === true);
+  const r = scorePracticeWords(units, key, delayed, { tol: 50 });
+  ok('对齐后不再"全没唱到"（sung≥6）', r.summary.sung >= 6, JSON.stringify(r.summary));
+  ok('对齐后 missed 少', r.summary.missed <= 1, String(r.summary.missed));
+  ok('结果带 align 信息', r.align && r.align.aligned === true);
+}
+
+console.log('\n── 快 / 慢（关掉自动对齐，测逐字节奏） ──');
 {
   const early = F([[60,-0.12,0.38],[62,0.5,1],[64,1,1.5],[65,1.5,2],[67,3,3.5],[69,3.5,4],[71,4,4.5]]);
-  const rE = scorePracticeWords(units, key, early, { tol: 50 });
+  const rE = scorePracticeWords(units, key, early, { tol: 50, autoAlign: false });
   ok('早唱 timingMs<0 / 快了', rE.words[0].timingMs < 0 && /快了/.test(rE.words[0].timing), JSON.stringify([rE.words[0].timingMs, rE.words[0].timing]));
   const late = F([[60,0.2,0.7],[62,0.7,1.2],[64,1.2,1.7],[65,1.7,2.2],[67,3,3.5],[69,3.5,4],[71,4,4.5]]);
-  const rL = scorePracticeWords(units, key, late, { tol: 50 });
+  const rL = scorePracticeWords(units, key, late, { tol: 50, autoAlign: false });
   ok('晚唱 偏慢统计>0', rL.summary.late > 0, String(rL.summary.late));
 }
 

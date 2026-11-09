@@ -93,14 +93,20 @@
         <div class="parsed-block">
           <div class="pb-head">
             <span>歌词</span>
-            <small>每行对应一句，可编辑；○ 是占位字</small>
+            <small>每行对应一句；录参考时会自动识别，可随时修改</small>
           </div>
           <textarea id="lyricEditor" class="lyric-editor" spellcheck="false"></textarea>
+          <div class="lyric-tools">
+            <button class="btn tiny" id="btnRecognize">🎤 识别歌词</button>
+            <button class="btn tiny primary" id="btnConfirmLyrics">✓ 确定歌词</button>
+            <span class="lyric-status" id="lyricStatus">用占位符 ○ 也能先练，改完点「确定歌词」</span>
+          </div>
         </div>
 
         <div class="parsed-block">
           <div class="pb-head"><span>简谱</span><small id="scoreInfo">—</small></div>
           <div class="jp-sheet" id="jpSheet"></div>
+          <div class="jp-legend">数字 1–7 是唱名 · <b>↑</b> 高半音 · <b>↓</b> 低半音 · <b>˙</b> 高八度 · <b>.</b> 低八度</div>
         </div>
 
         <div class="parsed-actions">

@@ -100,17 +100,29 @@ check('有可编辑歌词框', await evaluate(`!!document.getElementById('lyricE
 check('歌词初始为占位○', /○/.test(s1.lyricEditorValue), s1.lyricEditorValue);
 check('简谱表有 7 个格子', s1.jpCells === 7, String(s1.jpCells));
 check('简谱表含 1 2 3（唱名）', /1/.test(s1.jpSheet) && /2/.test(s1.jpSheet) && /3/.test(s1.jpSheet), s1.jpSheet.slice(0,80));
+check('简谱无字母 b/#（改数字+↑↓）', await evaluate(`(() => { const s=window.__STUDIO.getState().score; return s.lines.every(l=>l.units.every(u=>!/[a-zA-Zb#]/.test(u.jianpu.symbol))); })()`));
+check('简谱有图例说明 ↑↓', /↑/.test(s1.jpLegend || '') && /↓/.test(s1.jpLegend || ''), s1.jpLegend);
 check('结果卡里没有旧版统计块', await evaluate(`!document.getElementById('parsedStats') && !document.getElementById('roll')`));
 
-console.log('\n── 歌词可编辑，且重建逐字谱 ──');
+console.log('\n── 歌词：识别 / 可编辑 / 确定 ──');
 const edited = await evaluate(`(() => {
   window.__STUDIO.setLyrics('一闪一闪\\n亮晶晶');
   const st = window.__STUDIO.getState();
-  return { val: st.lyricEditorValue, chars: st.score.lines.map(l=>l.units.map(u=>u.char).join('')), cells: st.jpCells };
+  return { val: st.lyricEditorValue, chars: st.score.lines.map(l=>l.units.map(u=>u.char).join('')), cells: st.jpCells,
+           hasRecognize: st.hasRecognizeBtn, hasConfirm: st.hasConfirmBtn };
 })()`);
+check('有「识别歌词」按钮', edited.hasRecognize === true);
+check('有「确定歌词」按钮', edited.hasConfirm === true);
 check('歌词写入「一闪一闪」', edited.chars[0] === '一闪一闪', JSON.stringify(edited.chars));
 check('歌词写入「亮晶晶」', edited.chars[1] === '亮晶晶', JSON.stringify(edited.chars));
 check('编辑后简谱格数不变', edited.cells === 7, String(edited.cells));
+const confirmed = await evaluate(`window.__STUDIO.confirmLyrics()`);
+check('点「确定歌词」后 confirmed=true', confirmed.confirmed === true);
+check('确定后歌词生效', /一闪一闪/.test(confirmed.text), confirmed.text);
+// 模拟录音时识别到的连续文本 → 自动逐句对齐
+const recognized = await evaluate(`window.__STUDIO.setRecognizedLyrics('一闪一闪亮晶晶')`);
+check('识别到的连续文本按句切成两行', recognized.split('\n')[0] === '一闪一闪' && recognized.split('\n')[1] === '亮晶晶', recognized);
+await evaluate(`window.__STUDIO.confirmLyrics()`);
 
 console.log('\n── ② 练唱：K歌倒计时 + 逐字高亮（不显示其他） ──');
 const kBefore = await evaluate(`document.getElementById('karaoke').classList.contains('hidden')`);
@@ -172,6 +184,16 @@ const tagText = await evaluate(`document.querySelector('.lr-cell .lr-tag').textC
 check('字上标出「偏高」', /偏高/.test(tagText), tagText);
 const pairNums = await evaluate(`(() => { const c=document.querySelector('.lr-cell'); return { ref:c.querySelector('.lr-ref').textContent, my:c.querySelector('.lr-my').textContent }; })()`);
 check('上排原唱简谱 ≠ 下排我唱简谱', pairNums.ref !== pairNums.my, JSON.stringify(pairNums));
+
+console.log('\n── 自动时间对齐：整体晚开口不再"全没唱到" ──');
+// 整段晚 0.8s 的完美清唱
+const DELAYED = N([[60,0.8,1.3],[62,1.3,1.8],[64,1.8,2.3],[65,2.3,2.8],[67,3.8,4.3],[69,4.3,4.8],[71,4.8,5.3]]);
+await evaluate(`window.__STUDIO.commitPracticeFrames(${DELAYED})`);
+await sleep(300);
+const sd = await evaluate(`window.__STUDIO.getState()`);
+check('对齐后唱到 ≥6 字（不是全漏）', sd.practiceSummary.sung >= 6, JSON.stringify(sd.practiceSummary));
+check('对齐后漏唱 ≤1', sd.practiceSummary.missed <= 1, String(sd.practiceSummary.missed));
+check('结果标注已自动对齐', sd.practiceAlign?.aligned === true, JSON.stringify(sd.practiceAlign));
 
 console.log('\n── 历史任意两段互比 ──');
 const idA = await evaluate(`window.__STUDIO.importFrames(${REF}, '导入A')`);

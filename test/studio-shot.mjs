@@ -60,10 +60,11 @@ async function shot(name) {
 }
 
 await shot('studio-1-idle.png');
-// 解析卡（3 块），并填入歌词
+// 解析卡（3 块）：模拟识别到歌词 + 确定
 await evaluate(`window.__STUDIO.commitReferenceFrames(${REF})`);
 await sleep(350);
-await evaluate(`window.__STUDIO.setLyrics('一闪一闪\\n亮晶晶')`);
+await evaluate(`window.__STUDIO.setRecognizedLyrics('一闪一闪亮晶晶')`);
+await evaluate(`window.__STUDIO.confirmLyrics()`);
 await sleep(100);
 await shot('studio-2-parsed.png');
 // K歌练唱视图（倒计时结束后的逐字高亮）
@@ -73,10 +74,11 @@ await evaluate(`window.__STUDIO.renderKaraokeAt(0.6)`);
 await evaluate(`document.getElementById('kCount').classList.add('hidden')`);
 await sleep(80);
 await shot('studio-3-karaoke.png');
-// 结果：一篇歌词上下两排
+// 结果：一篇歌词上下两排（用识别+确定的真实歌词）
 await evaluate(`window.__STUDIO.commitReferenceFrames(${REF})`);
 await sleep(300);
-await evaluate(`window.__STUDIO.setLyrics('一闪一闪\\n亮晶晶')`);
+await evaluate(`window.__STUDIO.setRecognizedLyrics('一闪一闪亮晶晶')`);
+await evaluate(`window.__STUDIO.confirmLyrics()`);
 await evaluate(`window.__STUDIO.commitPracticeFrames(${SHARP})`);
 await sleep(300);
 await shot('studio-4-result.png');

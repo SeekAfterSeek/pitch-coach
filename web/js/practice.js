@@ -10,7 +10,7 @@
  *
  * 输出：每个字的诊断
  *   - char 歌词字
- *   - refNum 原唱简谱（如 "1" / "#4" / "5˙"）
+ *   - refNum 原唱简谱（如 "1" / "4↑" / "5˙"，纯数字+↑↓+八度点）
  *   - myNum  我唱的简谱（同上；没唱到为 '—'）
  *   - pitch  偏高 / 偏低 / 准 / 没唱到
  *   - timing 快了 / 慢了 / 节奏准（含毫秒）
@@ -36,9 +36,59 @@ export function practiceBand(devCents, tol) {
 /** 单字诊断文案 */
 export function practiceWordText(r, tol) {
   if (r.status === 'missed') return '没唱到';
-  const pitch = r.pitch;                 // 准 / 偏高 / 偏低 / 跑高了 / 跑低了
+  const pitch = r.pitch;                 // 准 / 偏高 / 偏低
   const timing = r.timing;               // 节奏准 / 快了 Xms / 慢了 Xms
   return `${pitch} · ${timing}`;
+}
+
+/**
+ * 估计练唱录音相对参考谱的整体时间平移量。
+ *
+ * 「全没唱到」多半不是真没唱，而是开口早/晚了几百毫秒——Voronoi 分区
+ * 落在字位之外当然判 missed。这里用音高轮廓相关把整段录音平移到谱子上：
+ *   对每个候选 off，把帧时间 + off，看它落在哪个字位、音高是否接近该字目标。
+ * 取匹配最好的 off 返回（单位秒）。相关度太低则不平移，避免瞎对齐。
+ *
+ * @param {Array} units 逐字谱（含 start,end,midi）
+ * @param {Array} frames 练唱帧
+ * @param {{maxLagSec?, stepSec?}} opts
+ * @returns {{shift:number, corr:number, aligned:boolean}}
+ */
+export function estimatePracticeOffset(units, frames, opts = {}) {
+  const voiced = (frames || []).filter((f) => f.voiced && f.midi > 0);
+  if (!voiced.length || !units?.length) return { shift: 0, corr: 0, aligned: false };
+
+  const targetAt = (t) => {
+    for (const u of units) if (t >= u.start && t < u.end) return u.midi;
+    return null;
+  };
+
+  const maxLag = opts.maxLagSec ?? 4;
+  const step = opts.stepSec ?? 0.05;
+  let best = { shift: 0, corr: 0 };
+
+  for (let off = -maxLag; off <= maxLag; off += step) {
+    let hit = 0, total = 0;
+    for (const f of voiced) {
+      const tgt = targetAt(f.t + off);
+      if (tgt == null) continue;
+      total++;
+      const d = Math.abs(f.midi - tgt) * 100;
+      if (d < 100) hit += 1 - d / 100;   // 半音内给分，越准越高
+    }
+    if (!total) continue;
+    // 归一化 + 覆盖惩罚（对齐后应覆盖录音大部分有声帧）
+    const ratio = total / voiced.length;
+    const corr = (hit / total) * Math.min(1, ratio / 0.5);
+    if (corr > best.corr) best = { shift: off, corr };
+  }
+  return { ...best, aligned: best.corr >= (opts.minCorr ?? 0.25) };
+}
+
+/** 把帧按 shift 平移（refT = t + shift） */
+export function shiftPracticeFrames(frames, shift) {
+  if (!shift) return frames;
+  return frames.map((f) => ({ ...f, t: f.t + shift }));
 }
 
 /**
@@ -52,10 +102,18 @@ export function scorePracticeWords(units, key, takeFrames, opts = {}) {
   const reach = opts.reach ?? 0.14;
 
   if (!units?.length) {
-    return { words: [], summary: { total: 0, sung: 0, missed: 0, high: 0, low: 0, early: 0, late: 0, accurate: 0 } };
+    return { words: [], summary: { total: 0, sung: 0, missed: 0, high: 0, low: 0, early: 0, late: 0, accurate: 0 }, align: { shift: 0, aligned: false } };
   }
 
-  const voiced = (takeFrames || []).filter((f) => f.voiced && f.midi > 0);
+  // —— 自动时间对齐：先整体平移到参考谱，再逐字判定 ——
+  let frames = takeFrames || [];
+  let align = { shift: 0, corr: 0, aligned: false };
+  if (opts.autoAlign !== false) {
+    align = estimatePracticeOffset(units, frames, opts);
+    if (align.aligned) frames = shiftPracticeFrames(frames, align.shift);
+  }
+
+  const voiced = frames.filter((f) => f.voiced && f.midi > 0);
 
   // Voronoi 分区
   const bounds = units.map((u, i) => {
@@ -124,7 +182,7 @@ export function scorePracticeWords(units, key, takeFrames, opts = {}) {
     meanTimingMs: sung.length ? mean(sung.map((w) => w.timingMs)) : 0,
   };
 
-  return { words, summary };
+  return { words, summary, align };
 }
 
 /** 把逐字结果按原来的行重新分组，供"显示一篇歌词"用 */
