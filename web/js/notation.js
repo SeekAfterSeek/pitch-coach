@@ -231,17 +231,27 @@ export function buildScore(notes, key, lyricText, opts = {}) {
     maxPerLine: opts.maxPerLine ?? 8,
   });
   const inputLines = String(lyricText || '').split(/\r?\n/);
+  // charMap：按【音符全局顺序】给出的逐字歌词（realignLyricsToScore 的产物）。
+  // 传了它就以它为准 —— 这样"哪个字对应哪个音符"是精确钉死的，
+  // 而不是靠文本换行重新猜一遍。
+  const charMap = Array.isArray(opts.charMap) && opts.charMap.length >= notes.length
+    ? opts.charMap : null;
 
   const lines = groups.map((group, li) => {
-    const raw = (inputLines[li] || '').replace(/\s+/g, '');
-    const chars = [...raw].filter((c) => !/^[\p{P}\p{S}]+$/u.test(c));
-    const n = group.length;
-    // 一字一音符对齐；多余并进最后一格，不足补占位
-    const assigned = [];
-    for (let i = 0; i < n; i++) {
-      if (i < chars.length - (n - 1) && i < n - 1) assigned.push(chars[i]);
-      else if (i === n - 1) assigned.push(chars.slice(i).join('') || '○');
-      else assigned.push(chars[i] ?? '○');
+    let assigned;
+    if (charMap) {
+      assigned = group.map((note) => charMap[note._gi] || '○');
+    } else {
+      const raw = (inputLines[li] || '').replace(/\s+/g, '');
+      const chars = [...raw].filter((c) => !/^[\p{P}\p{S}]+$/u.test(c));
+      const n = group.length;
+      // 一字一音符对齐；多余并进最后一格，不足补占位
+      assigned = [];
+      for (let i = 0; i < n; i++) {
+        if (i < chars.length - (n - 1) && i < n - 1) assigned.push(chars[i]);
+        else if (i === n - 1) assigned.push(chars.slice(i).join('') || '○');
+        else assigned.push(chars[i] ?? '○');
+      }
     }
 
     const units = group.map((note, j) => {
@@ -259,10 +269,14 @@ export function buildScore(notes, key, lyricText, opts = {}) {
       };
     });
 
+    const lineStart = group[0].start;
+    const lineEnd = Math.max(...group.map((x) => x.end ?? x.start + 0.5));
     return {
       index: li,
-      start: group[0].start,
-      end: Math.max(...group.map((x) => x.end ?? x.start + 0.5)),
+      phraseNo: li + 1,          // 第几句（练唱时"第 N 句开始"提示用）
+      phraseStart: lineStart,    // 这句的开始时刻（倒计时 3-2-1 的锚点）
+      start: lineStart,
+      end: lineEnd,
       units,
     };
   });
@@ -276,7 +290,14 @@ export function buildScore(notes, key, lyricText, opts = {}) {
     noteCount: notes.length,
     unitCount: lines.reduce((s, l) => s + l.units.length, 0),
     duration: Math.max(...notes.map((x) => x.end ?? x.start + 0.5)),
+    charMap: charMap ? charMap.slice() : null,
   };
+}
+
+/** 从一份已编译的 score 里取出「按音符全局顺序」的逐字歌词，
+ *  供编辑器把"每个字对应哪个音符"逐格摊开。 */
+export function scoreCharMap(score) {
+  return flattenScore(score).map((u) => u.char || '○');
 }
 
 /** 简谱符号的 HTML 片段（八度点画在数字上/下方，半音用 ↑↓ 角标） */

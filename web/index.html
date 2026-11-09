@@ -90,6 +90,14 @@
           <span class="pk-jp" id="keyJianpu">—</span>
         </div>
 
+        <!-- 播放刚录进去的原声：原声唱到哪个音符，简谱就高亮哪一格 -->
+        <div class="ref-play" id="refPlay">
+          <button class="btn small primary" id="btnPlayRef">▶ 播放我刚录的原声</button>
+          <button class="btn small ghost" id="btnStopRef" disabled>■ 停止</button>
+          <span class="rp-hint" id="refPlayHint">听着原声看简谱，唱到哪个音符就会亮哪一格</span>
+          <div class="rp-progress"><div class="rp-fill" id="refPlayFill"></div></div>
+        </div>
+
         <div class="parsed-block">
           <div class="pb-head">
             <span>歌词</span>
@@ -98,6 +106,7 @@
           <textarea id="lyricEditor" class="lyric-editor" spellcheck="false"></textarea>
           <div class="lyric-tools">
             <button class="btn tiny" id="btnRecognize">🎤 识别歌词</button>
+            <button class="btn tiny" id="btnRealign">🔄 重新解析匹配</button>
             <button class="btn tiny primary" id="btnConfirmLyrics">✓ 确定歌词</button>
             <span class="lyric-status" id="lyricStatus">用占位符 ○ 也能先练，改完点「确定歌词」</span>
           </div>
@@ -107,6 +116,15 @@
           <div class="pb-head"><span>简谱</span><small id="scoreInfo">—</small></div>
           <div class="jp-sheet" id="jpSheet"></div>
           <div class="jp-legend">数字 1–7 是唱名 · <b>↑</b> 高半音 · <b>↓</b> 低半音 · <b>˙</b> 高八度 · <b>.</b> 低八度</div>
+        </div>
+
+        <!-- 逐字对应格：一眼看清「哪个字 = 哪个音符 / 几拍」，且能逐格改字 -->
+        <div class="parsed-block">
+          <div class="pb-head">
+            <span>逐字对应</span>
+            <small id="cellHint">上排是原唱音符，下面格子是字；点格子直接改这个音符上的字</small>
+          </div>
+          <div class="jp-cell-editor" id="jpCellEditor"></div>
         </div>
 
         <div class="parsed-actions">
@@ -193,16 +211,18 @@
     <div class="modal-body">
       <h3>1. 让它听见你</h3>
       <p>点右上角「开启麦克风」并允许权限。建议戴耳机，避免外放串进麦克风。</p>
-      <h3>2. 录入参考人声 → 只看三样</h3>
-      <p>点「录入参考人声」清唱/朗读一段，点「停止录音」后自动解析。结果只显示三块：<b>什么调</b>（C 大调 / A 小调 …）、<b>歌词</b>（可编辑，每行一句）、<b>简谱</b>（每个字的音符与节拍）。</p>
-      <h3>3. 练唱：像 K 歌一样</h3>
-      <p>点「练唱开始」后有 <b>3-2-1 倒计时</b>，然后逐字高亮：能看到每个字的<b>歌词、简谱音符、几拍</b>，跟着唱。唱完点「停止录音」。</p>
-      <h3>4. 结果：一篇歌词，上下两排</h3>
-      <p>结果显示整篇歌词。每个字上下两排：<b>上排原唱简谱、下排你唱的简谱</b>，并标出「偏高 / 偏低 / 快了 / 慢了 / 没唱到」。句末还有一句小结，比如「一闪一闪偏高、亮晶晶偏慢」。</p>
-      <h3>5. 历史任意互比</h3>
+      <h3>2. 录入参考人声 → 边听边核对</h3>
+      <p>点「录入参考人声」清唱/朗读一段，点「停止录音」后自动解析。解析卡里：<b>什么调</b>（C 大调 / A 小调 …）、<b>歌词</b>（可编辑）、<b>简谱</b>、<b>逐字对应格</b>。点 <b>「▶ 播放我刚录的原声」</b>，原声唱到哪个音符，简谱和逐字格就会<b>亮起那一格</b>，一眼看清字落在哪个音上。</p>
+      <h3>3. 改歌词 → 重新解析匹配 → 确定</h3>
+      <p>在歌词框里改字（或粘贴整段）后，点 <b>「🔄 重新解析匹配」</b>：会拿第一次录音解析出的节奏骨架，把歌词按每句实际演唱时长重新分句、逐字钉回每个音符。下面的「逐字对应格」可以<b>点单个格子改那个音符上的字</b>。核对无误点 <b>「✓ 确定歌词」</b> 锁定。</p>
+      <h3>4. 练唱：像 K 歌一样</h3>
+      <p>点「练唱开始」后有 <b>3-2-1 倒计时</b>，每句起音前也会给「第 N 句 · 3-2-1 这一句开始」提词；然后逐字高亮：能看到每个字的<b>歌词、简谱音符、几拍</b>，跟着唱。唱完点「停止录音」。</p>
+      <h3>5. 结果：一篇歌词，上下两排</h3>
+      <p>结果显示整篇歌词。每个字上下两排：<b>上排原唱简谱、下排你唱的简谱</b>，并标出「偏高 / 偏低 / 快了 / 慢了 / 没唱到」。句末还有一句小结，比如「4 字偏高」。</p>
+      <h3>6. 历史任意互比</h3>
       <p>每次录音都进右侧「我的录音」。点一条设为 <b>A 参考</b>，再点另一条设为 <b>B 对比</b>，点「对比这两段」——任意两段人声都能互相当标准比。</p>
       <h3>说明</h3>
-      <p>歌词文本不是语音识别出来的；这里对比的是<b>纯人声旋律本身</b>（音高 + 节奏）。所有音频只存在这台电脑的浏览器里，不上传。</p>
+      <p>歌词可自动识别、手动填写、按节奏重排、逐格修改，最终由你「确定」；对比的是<b>纯人声旋律本身</b>（音高 + 节奏）。所有音频只存在这台电脑的浏览器里，不上传。</p>
     </div>
   </div>
 </div>

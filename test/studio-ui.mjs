@@ -109,10 +109,13 @@ const edited = await evaluate(`(() => {
   window.__STUDIO.setLyrics('一闪一闪\\n亮晶晶');
   const st = window.__STUDIO.getState();
   return { val: st.lyricEditorValue, chars: st.score.lines.map(l=>l.units.map(u=>u.char).join('')), cells: st.jpCells,
-           hasRecognize: st.hasRecognizeBtn, hasConfirm: st.hasConfirmBtn };
+           hasRecognize: st.hasRecognizeBtn, hasRealign: st.hasRealignBtn, hasConfirm: st.hasConfirmBtn,
+           hasPlayRef: st.hasPlayRefBtn };
 })()`);
 check('有「识别歌词」按钮', edited.hasRecognize === true);
+check('有「重新解析匹配」按钮', edited.hasRealign === true);
 check('有「确定歌词」按钮', edited.hasConfirm === true);
+check('有「播放我刚录的原声」按钮', edited.hasPlayRef === true);
 check('歌词写入「一闪一闪」', edited.chars[0] === '一闪一闪', JSON.stringify(edited.chars));
 check('歌词写入「亮晶晶」', edited.chars[1] === '亮晶晶', JSON.stringify(edited.chars));
 check('编辑后简谱格数不变', edited.cells === 7, String(edited.cells));
@@ -123,6 +126,52 @@ check('确定后歌词生效', /一闪一闪/.test(confirmed.text), confirmed.te
 const recognized = await evaluate(`window.__STUDIO.setRecognizedLyrics('一闪一闪亮晶晶')`);
 check('识别到的连续文本按句切成两行', recognized.split('\n')[0] === '一闪一闪' && recognized.split('\n')[1] === '亮晶晶', recognized);
 await evaluate(`window.__STUDIO.confirmLyrics()`);
+
+console.log('\n── 解析卡：播放原声时逐音符亮格 + 逐字对应格 ──');
+// 逐字对应格：一个音符一个可改输入框
+const cellState = await evaluate(`(() => { const st = window.__STUDIO.getState();
+  return { inputs: st.jceInputs, cells: st.jceCells, phraseStarts: st.phraseStarts }; })()`);
+check('逐字对应格有 7 个可编辑输入框', cellState.inputs === 7, String(cellState.inputs));
+check('逐字对应格有 7 个音符格', cellState.cells === 7, String(cellState.cells));
+check('乐句起点可查（第1句0s / 第2句3s）', cellState.phraseStarts[0] === 0 && cellState.phraseStarts[1] === 3,
+  JSON.stringify(cellState.phraseStarts));
+// 模拟播放到 0.2s（第1个音符）：简谱表 + 逐字格同步高亮第 0 格
+const hi0 = await evaluate(`window.__STUDIO.highlightRefAt(0.2)`);
+check('播放 0.2s 高亮第 1 个音符（简谱表）', hi0.jpOn.includes(0), JSON.stringify(hi0.jpOn));
+check('播放 0.2s 高亮第 1 个音符（逐字格）', hi0.cellOn.includes(0), JSON.stringify(hi0.cellOn));
+// 3.2s 落在 [67, 3, 3.5) = 第 2 句首音（全局索引 4）；3.6s 落在下一个音（索引 5）
+const hi4 = await evaluate(`window.__STUDIO.highlightRefAt(3.2)`);
+check('播放 3.2s 高亮第 2 句首音（全局索引 4）', hi4.jpOn.includes(4) && hi4.cellOn.includes(4), JSON.stringify(hi4));
+// 每个音符有「简谱格 + 歌词格」两个元素同亮，去重后应只落在当前这一个音符
+check('高亮去重后只落在当前一个音符', new Set(hi4.jpOn).size === 1, JSON.stringify(hi4.jpOn));
+const hi5 = await evaluate(`window.__STUDIO.highlightRefAt(3.6)`);
+check('播放 3.6s 高亮切到下一个音符（索引 5）', hi5.jpOn.includes(5), JSON.stringify(hi5.jpOn));
+await evaluate(`window.__STUDIO.stopRefPlayback()`);
+// 注入"本轮存下原声音频"后播放按钮可用
+const canPlay = await evaluate(`(() => { window.__STUDIO.simulateRefBlob(); const st=window.__STUDIO.getState();
+  return { blob: st.refBlob, disabled: document.getElementById('btnPlayRef').disabled }; })()`);
+check('有原声音频时播放按钮可用', canPlay.blob === true && canPlay.disabled === false, JSON.stringify(canPlay));
+
+console.log('\n── 改歌词 → 重新解析匹配 → 逐格改 → 确定 ──');
+// 用户把歌词改成另一段（连续文本，长度不同），点「重新解析匹配」
+const realign = await evaluate(`(() => {
+  window.__STUDIO.setLyrics('两只老虎跑得快');
+  const r = window.__STUDIO.realignLyrics();
+  const st = window.__STUDIO.getState();
+  return { r, charMap: st.charMap, editor: st.lyricEditorValue, status: st.lyricStatus };
+})()`);
+check('重排后 charMap 长度 = 7 个音符', realign.charMap?.length === 7, JSON.stringify(realign.charMap));
+check('重排后歌词换成「两只老虎跑得快」', /两只老虎/.test(realign.editor), realign.editor);
+check('重排状态提示按节奏匹配', /按原声节奏重新匹配/.test(realign.status), realign.status);
+check('重排结果按句分行', realign.r?.phraseCount === 2, JSON.stringify(realign.r));
+// 逐格改：把第 0 个音符上的字改成「喵」
+const cellEdit = await evaluate(`(() => { const c = window.__STUDIO.setCellChar(0, '喵'); const st = window.__STUDIO.getState();
+  return { c, map0: st.charMap[0], editor: st.lyricEditorValue, inputs: st.jceInputs }; })()`);
+check('逐格改字写入 charMap 第 0 格', cellEdit.map0 === '喵', JSON.stringify(cellEdit));
+check('逐格改字同步回歌词文本框', /喵/.test(cellEdit.editor), cellEdit.editor);
+check('逐格改后输入框数不变', cellEdit.inputs === 7, String(cellEdit.inputs));
+const confirmed2 = await evaluate(`window.__STUDIO.confirmLyrics()`);
+check('确定后逐字对应锁定', /喵/.test(confirmed2.text), confirmed2.text);
 
 console.log('\n── ② 练唱：K歌倒计时 + 逐字高亮（不显示其他） ──');
 const kBefore = await evaluate(`document.getElementById('karaoke').classList.contains('hidden')`);
@@ -144,6 +193,10 @@ check('高亮字含简谱', /k-jp/.test(kHtml) && /[1-7]/.test(kHtml), kHtml.sli
 check('高亮字含节拍', /k-beat/.test(kHtml) && /拍/.test(kHtml), kHtml.slice(0,80));
 check('高亮字含歌词', /k-char/.test(kHtml));
 check('有当前字高亮', /k-unit on/.test(kHtml), kHtml.slice(0,120));
+// 「什么时候开始唱每一句」：第 2 句起音前的 3-2-1 提词
+const cueHint = await evaluate(`(() => { window.__STUDIO.renderKaraokeAt(1.9);
+  return document.getElementById('kHint').textContent; })()`);
+check('下一句起音前给「第 2 句 · 3-2-1 准备起唱」', /第 2 句/.test(cueHint) && /准备起唱/.test(cueHint), cueHint);
 const kHigh = await evaluate(`(() => {
   const st = window.__STUDIO.getState();
   return st.score.lines[0].units.map(u => ({ char: u.char, jp: u.jianpu.symbol, beat: u.beat }));

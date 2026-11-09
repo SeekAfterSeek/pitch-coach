@@ -192,8 +192,9 @@ body {
 .jp-nudge { font-size: 11px; color: var(--yellow); vertical-align: super; margin-left: 1px; }
 .jp-legend { font-size: 10.5px; color: var(--text-3); margin-top: 8px; }
 .jp-legend b { color: var(--cyan); }
-.jp-line { padding: 8px 0; border-bottom: 1px dashed var(--line); }
+.jp-line { padding: 8px 0; border-bottom: 1px dashed var(--line); border-radius: 8px; transition: background .15s; }
 .jp-line:last-child { border-bottom: 0; }
+.jp-line.jp-line-on { background: rgba(37,224,138,.10); }
 .jp-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .jp-notes { margin-bottom: 2px; }
 .jp-cell, .jp-ch { min-width: 34px; text-align: center; }
@@ -201,7 +202,38 @@ body {
 .jp-beat { display: block; font-size: 9px; color: var(--text-3); }
 .jp-dots { font-size: 9px; }
 .jp-lyric .jp-ch { font: 15px/1.5 "PingFang SC", monospace; color: var(--text); }
+/* 原声播放到该音符时，对应格高亮 */
+.jp-cell.jp-on, .jp-ch.jp-on { border-radius: 6px; }
+.jp-cell.jp-on { background: rgba(37,224,138,.22); box-shadow: 0 0 0 1px rgba(37,224,138,.6); }
+.jp-cell.jp-on .jp-note { color: #fff; }
+.jp-ch.jp-on { background: rgba(37,224,138,.22); color: var(--green); font-weight: 700; }
 .parsed-actions { display: flex; gap: 10px; margin-top: 4px; }
+
+/* ── 播放刚录的原声（边听边看简谱亮格） ── */
+.ref-play { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 14px;
+  border-radius: 10px; border: 1px solid rgba(63,208,224,.28); background: rgba(63,208,224,.05); margin-bottom: 14px; }
+.rp-hint { font-size: 11px; color: var(--text-2); flex: 1; min-width: 180px; }
+.rp-progress { width: 100%; height: 5px; border-radius: 999px; background: rgba(255,255,255,.06); overflow: hidden; }
+.rp-fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--cyan), var(--green)); transition: width .05s linear; }
+
+/* ── 逐字对应格：一个音符一个格，字可直接改 ── */
+.jp-cell-editor { border-radius: 9px; border: 1px solid var(--line); background: #0a1119; padding: 12px 14px; }
+.jce-line { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px dashed var(--line); flex-wrap: wrap; }
+.jce-line:last-child { border-bottom: 0; }
+.jce-line.jce-line-on { background: rgba(37,224,138,.08); border-radius: 8px; }
+.jce-no { font-size: 10px; color: var(--text-3); flex: 0 0 auto; min-width: 34px; }
+.jce-cells { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
+.jce-cell { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; min-width: 40px; padding: 4px 5px;
+  border-radius: 8px; border: 1px solid var(--line); background: rgba(255,255,255,.02); transition: .12s; }
+.jce-cell.jce-on { border-color: rgba(37,224,138,.65); background: rgba(37,224,138,.16); transform: scale(1.06); }
+.jce-cell.jce-on .jce-jp { color: #fff; }
+.jce-jp { font: 700 15px/1.1 "PingFang SC", monospace; color: var(--cyan); }
+.jce-beat { font-size: 9px; color: var(--text-3); }
+.jce-time { font-size: 8.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.jce-input { width: 40px; min-width: 40px; text-align: center; padding: 1px 2px; border-radius: 6px;
+  border: 1px solid var(--line-strong); background: #0c141d; color: var(--text);
+  font: 700 15px/1.4 "PingFang SC", monospace; }
+.jce-input:focus { outline: none; border-color: var(--green); background: #10201a; }
 
 /* ── 练唱卡拉OK ── */
 .karaoke { margin-top: 16px; padding: 22px 18px; border-radius: 14px; text-align: center; position: relative;

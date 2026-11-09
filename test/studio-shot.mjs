@@ -60,13 +60,21 @@ async function shot(name) {
 }
 
 await shot('studio-1-idle.png');
-// 解析卡（3 块）：模拟识别到歌词 + 确定
+// 解析卡：模拟识别到歌词 + 重新解析匹配 + 逐格改字 + 确定 + 播放原声亮格
 await evaluate(`window.__STUDIO.commitReferenceFrames(${REF})`);
 await sleep(350);
+await evaluate(`window.__STUDIO.simulateRefBlob()`);
 await evaluate(`window.__STUDIO.setRecognizedLyrics('一闪一闪亮晶晶')`);
-await evaluate(`window.__STUDIO.confirmLyrics()`);
+await evaluate(`window.__STUDIO.realignLyrics()`);
+await evaluate(`window.__STUDIO.highlightRefAt(0.6)`);   // 让某一格亮着，截图能看见
 await sleep(100);
 await shot('studio-2-parsed.png');
+// 往下滚，露出「逐字对应格」（一个音符一个可改输入框）
+await evaluate(`(() => { const c=document.getElementById('jpCellEditor');
+  c.scrollIntoView({block:'center'}); return c.getBoundingClientRect().top; })()`);
+await sleep(120);
+await shot('studio-2b-cells.png');
+await evaluate(`document.getElementById('stage').scrollTo(0,0)`);
 // K歌练唱视图（倒计时结束后的逐字高亮）
 await evaluate(`window.__STUDIO.previewKaraoke(0.6)`);
 await sleep(150);

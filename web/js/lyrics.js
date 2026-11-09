@@ -343,3 +343,98 @@ export function alignTextToPhrases(text, lineNoteCounts) {
     return out.join('');
   }).join('\n');
 }
+
+/* ────────────── 节奏感知的「重新解析匹配」 ────────────── */
+
+/**
+ * 把用户改过的歌词，按第一次录音解析出的「节奏骨架」重新钉到每个音符上。
+ *
+ * 与 alignTextToPhrases 的区别（后者只按"每句音符数"比例硬切）：
+ *   - 乐句边界来自音频里音符间的大空档（groupPhrases 的结果）
+ *   - 连续歌词按【每句实际演唱时长】占比切分，而不是按音符个数占比
+ *     —— 唱得久的句子理应分到更多字，这才叫"按节奏"
+ *   - 用户在框里手动换的行数正好等于乐句数时，完全尊重用户的分句
+ *   - 句内字数 > 音符数：多出的字并进【时值最长】的音符（长音拖字/转音）
+ *     字数 ≤ 音符数：一字一音符，其余补 ○（用户可在逐格编辑器里补字）
+ *
+ * 输出 charMap 是"按音符全局顺序展平的字数组"，可直接喂给
+ * buildScore(notes, key, text, { charMap })，保证"哪个字对应哪个音符"精确可查。
+ *
+ * @param {string} text 用户歌词框里的文本（可含换行）
+ * @param {Array<Array>} groups groupPhrases(notes) 的结果，音符含 start/end
+ * @returns {{text:string, charMap:Array<string>, perLine:Array<Array<string>>,
+ *            phraseCount:number, totalChars:number, noteCount:number}}
+ */
+export function realignLyricsToScore(text, groups, opts = {}) {
+  const g = groups || [];
+  const noteCount = g.reduce((s, x) => s + x.length, 0);
+  if (!noteCount) {
+    return { text: '', charMap: [], perLine: [], phraseCount: 0, totalChars: 0, noteCount: 0 };
+  }
+
+  // 1) 清洗用户输入：按行收集可唱字符，丢掉空行 / 纯占位行
+  const raw = String(text || '').replace(/\r\n?/g, '\n').split('\n')
+    .map((l) => cleanLyricChars(l))
+    .filter((cs) => cs.length && !cs.every((c) => c === '○'));
+
+  // 2) 每句的节奏权重 = 该句实际演唱跨度（时长），不是音符个数
+  const spans = g.map((line) => {
+    const st = Math.min(...line.map((n) => n.start));
+    const en = Math.max(...line.map((n) => n.end ?? n.start + 0.5));
+    return Math.max(0.01, en - st);
+  });
+  const totalSpan = spans.reduce((a, b) => a + b, 0) || 1;
+
+  // 3) 字符分配到各句
+  let perLineChars;
+  if (raw.length === g.length) {
+    // 用户手动分的行数正好等于乐句数 → 尊重用户分句
+    perLineChars = raw.slice(0, g.length);
+  } else {
+    // 连续文本 / 行数不符 → 按演唱时长占比切分（按节奏）
+    const chars = raw.flat();
+    perLineChars = [];
+    let ci = 0;
+    for (let i = 0; i < g.length; i++) {
+      let take = i === g.length - 1
+        ? chars.length - ci
+        : Math.max(1, Math.round((spans[i] / totalSpan) * chars.length));
+      take = Math.min(Math.max(take, 0), Math.max(0, chars.length - ci));
+      perLineChars.push(chars.slice(ci, ci + take));
+      ci += take;
+    }
+  }
+
+  // 4) 句内把字符钉到每个音符
+  const perLine = g.map((line, i) => assignCharsToNotes(perLineChars[i] || [], line));
+  const charMap = perLine.flat();
+  const outText = perLine.map((cs) => cs.join('')).join('\n');
+
+  return {
+    text: outText,
+    charMap,
+    perLine,
+    phraseCount: g.length,
+    totalChars: raw.flat().length,
+    noteCount,
+  };
+}
+
+/** 句内分配：字数 > 音符 → 多余字并进最长音符；字数 ≤ 音符 → 一字一音符，其余 ○ */
+function assignCharsToNotes(chars, notes) {
+  const n = notes.length;
+  const out = new Array(n).fill('○');
+  if (!chars || !chars.length) return out;
+  if (chars.length <= n) {
+    for (let i = 0; i < chars.length; i++) out[i] = chars[i];
+    return out;
+  }
+  for (let i = 0; i < n; i++) out[i] = chars[i];
+  let li = 0, ld = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const d = (notes[i].end ?? notes[i].start + 0.5) - notes[i].start;
+    if (d > ld) { ld = d; li = i; }
+  }
+  out[li] = out[li] + chars.slice(n).join('');
+  return out;
+}
