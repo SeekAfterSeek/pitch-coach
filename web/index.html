@@ -4,485 +4,200 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<title>PitchCoach · 练唱音准教练</title>
-<link rel="stylesheet" href="./css/style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎤</text></svg>">
+<title>人声对比工作室 · 录一段，比一段</title>
+<link rel="stylesheet" href="./css/studio.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎙️</text></svg>">
 </head>
 <body>
 
 <!-- ══════════ 顶栏 ══════════ -->
 <header class="topbar">
   <div class="brand">
-    <span class="logo">🎤</span>
+    <span class="logo">🎙️</span>
     <div class="brand-txt">
-      <b>PitchCoach</b>
-      <small>练唱音准教练</small>
+      <b>人声对比工作室</b>
+      <small>录一段 · 解析一段 · 比一段</small>
     </div>
   </div>
-
   <div class="session-pill" id="sessionPill">
     <span class="dot" id="statusDot"></span>
-    <span id="statusText">未连接麦克风</span>
+    <span id="statusText">麦克风未连接</span>
   </div>
-
-  <nav class="tabs" id="tabs">
-    <button class="tab active" data-view="live">实时练唱</button>
-    <button class="tab" data-view="review">录音复盘</button>
-    <button class="tab" data-view="library">曲库</button>
-  </nav>
-
   <div class="topbar-actions">
-    <button class="icon-btn" id="btnSettings" title="设置">⚙</button>
+    <button class="btn small" id="btnMic">开启麦克风</button>
     <button class="icon-btn" id="btnHelp" title="使用说明">?</button>
   </div>
 </header>
 
-<main class="app">
+<main class="app studio">
 
-  <!-- ══════════════════ 实时练唱 ══════════════════ -->
-  <section class="view active" id="view-live">
+  <!-- ══════════ 主舞台：一步步走 ══════════ -->
+  <section class="stage panel" id="stage">
 
-    <div class="live-grid">
-      <!-- 左：表盘 + 控制 -->
-      <aside class="panel gauge-panel">
-        <div class="track-head">
-          <div class="track-meta">
-            <h2 id="trackTitle">—</h2>
-            <p id="trackSub">选择一首曲目开始</p>
-          </div>
+    <div class="stage-steps" id="stageSteps">
+      <div class="step" data-step="1"><span class="step-n">1</span><span>录入参考人声</span></div>
+      <div class="step" data-step="2"><span class="step-n">2</span><span>自动解析</span></div>
+      <div class="step" data-step="3"><span class="step-n">3</span><span>练唱 / 对比</span></div>
+    </div>
+
+    <!-- 大按钮区 -->
+    <div class="stage-main">
+      <div class="stage-hero" id="stageHero">
+        <div class="hero-icon" id="heroIcon">🎤</div>
+        <h1 id="heroTitle">先录一段纯人声</h1>
+        <p id="heroDesc">这段会作为「参考」。录完自动解析出它的音高与节奏，然后你再清唱一遍来对比。</p>
+      </div>
+
+      <div class="stage-actions" id="stageActions">
+        <button class="btn big primary" id="btnRecordRef">
+          <span class="ico">⏺</span> 录入参考人声
+        </button>
+      </div>
+
+      <!-- 录音中的状态条 -->
+      <div class="record-strip hidden" id="recordStrip">
+        <div class="rec-dot" id="recDot"></div>
+        <div class="rec-info">
+          <b id="recLabel">录音中…</b>
+          <span id="recTimer">0.0s</span>
         </div>
+        <div class="meter big"><div class="meter-fill" id="micMeter"></div></div>
+        <button class="btn record" id="btnStopRec">
+          <span class="ico">■</span> 停止录音
+        </button>
+      </div>
 
-        <div class="gauge-wrap">
-          <canvas id="gauge"></canvas>
+      <!-- 解析进度 -->
+      <div class="parse-strip hidden" id="parseStrip">
+        <div class="spinner"></div>
+        <div class="parse-info">
+          <b id="parseTitle">正在解析人声…</b>
+          <span id="parseSub">提取音高、节奏、音符</span>
         </div>
+        <div class="bar"><div class="bar-fill" id="parseBar"></div></div>
+      </div>
 
-        <div class="live-stats">
-          <div class="stat">
-            <label>当前得分</label>
-            <b class="big" id="liveScore">—</b>
-          </div>
-          <div class="stat">
-            <label>准音率</label>
-            <b id="liveAccuracy">—</b>
-          </div>
-          <div class="stat">
-            <label>音域</label>
-            <b id="liveRange">—</b>
-          </div>
+      <!-- 解析结果卡 -->
+      <div class="parsed-card hidden" id="parsedCard">
+        <div class="parsed-head">
+          <span class="ok-badge" id="parsedBadge">✓ 解析完成</span>
+          <b id="parsedTitle">参考人声</b>
         </div>
-
-        <div class="histogram" id="histogram" title="偏差分布：越靠中越准">
-          <div class="hist-label">音分偏差分布</div>
-          <div class="hist-bars" id="histBars"></div>
-        </div>
-
-        <!-- 当前应唱音：一眼看到原唱在这句是什么音 -->
-        <div class="now-note" id="nowNote">
-          <div class="now-label">此刻应唱</div>
-          <div class="now-row">
-            <b class="now-pitch" id="nowPitch">—</b>
-            <span class="now-cents" id="nowCents"></span>
-          </div>
-          <div class="now-sub" id="nowSub">点「播放参考」开始</div>
-        </div>
-
-        <div class="controls">
-          <button class="btn primary" id="btnPlay">
-            <span class="ico">▶</span> 播放参考
+        <div class="parsed-stats" id="parsedStats"></div>
+        <div class="parsed-actions">
+          <button class="btn big primary" id="btnPractice">
+            <span class="ico">⏺</span> 练唱开始
           </button>
-          <button class="btn record" id="btnRec">
-            <span class="ico">⏺</span> 开始录音
-          </button>
-          <button class="btn ghost" id="btnStop" disabled>停止</button>
+          <button class="btn ghost" id="btnRerecord">重录参考</button>
         </div>
+        <p class="parsed-hint">点「练唱开始」后再对着麦清唱一遍；唱完点「停止录音」即自动对比解析。</p>
+      </div>
+    </div>
 
-        <div class="mic-row">
-          <button class="btn small" id="btnMic">开启麦克风</button>
-          <button class="btn small ghost" id="btnMicOff" hidden>关闭</button>
-          <div class="meter"><div class="meter-fill" id="micMeter"></div></div>
+    <!-- 实时卷帘（练唱时显示参考线 + 你的声音） -->
+    <div class="stage-roll hidden" id="stageRoll">
+      <div class="roll-toolbar">
+        <div class="pill-group">
+          <button class="chip active" data-mode="exact">标准 ±50¢</button>
+          <button class="chip" data-mode="strict">专业 ±25¢</button>
+          <button class="chip" data-mode="loose">宽松 ±100¢</button>
         </div>
-
-        <div class="latency-row">
-          <label>延迟补偿</label>
-          <input type="range" id="latencySlider" min="-300" max="300" step="5" value="0">
-          <b id="latencyVal">0 ms</b>
-          <button class="btn tiny" id="btnAutoLatency" title="自动测量系统延迟">自动</button>
-        </div>
-      </aside>
-
-      <!-- 右：卷帘 + 提示 -->
-      <div class="panel roll-panel">
-        <div class="roll-toolbar">
-          <div class="pill-group">
-            <button class="chip active" data-range="6">6 秒</button>
-            <button class="chip" data-range="10">10 秒</button>
-            <button class="chip" data-range="16">16 秒</button>
-          </div>
-          <div class="pill-group">
-            <button class="chip active" data-mode="exact">标准 ±50¢</button>
-            <button class="chip" data-mode="strict">专业 ±25¢</button>
-            <button class="chip" data-mode="loose">宽松 ±100¢</button>
-          </div>
-          <div class="spacer"></div>
-          <label class="switch">
-            <input type="checkbox" id="cbReference" checked>
-            <span>跟唱参考音</span>
-          </label>
-          <button class="chip" id="btnTransposeDown">♭ 降调</button>
-          <b class="transpose-val" id="transposeVal">原调</b>
-          <button class="chip" id="btnTransposeUp">♯ 升调</button>
-        </div>
-
-        <div class="canvas-wrap">
-          <canvas id="roll"></canvas>
-          <div class="roll-overlay" id="rollHint">
-            <div class="hint-card">
-              <h3>准备开始</h3>
-              <p>1. 点「开启麦克风」授权<br>
-                 2. 选一首曲目<br>
-                 3. 点「播放参考」听标准音，跟着唱<br>
-                 4. 想复盘就点「开始录音」</p>
-            </div>
-          </div>
-        </div>
-
-        <!-- 动态歌词：当前句放大、下句预览、高亮进度 -->
-        <div class="lyrics-strip" id="lyricsStrip" hidden>
-          <div class="lyr-prev" id="lyrPrev"></div>
-          <div class="lyr-cur">
-            <span id="lyrCurText">—</span>
-            <div class="lyr-progress"><div class="lyr-progress-fill" id="lyrProgressFill"></div></div>
-          </div>
-          <div class="lyr-next" id="lyrNext"></div>
-        </div>
-
+        <div class="spacer"></div>
+        <span class="roll-tc" id="rollTimecode">0.0s</span>
+      </div>
+      <div class="canvas-wrap">
+        <canvas id="roll"></canvas>
         <div class="roll-legend">
           <span><i style="background:#96a6be"></i>参考旋律</span>
           <span><i style="background:#25e08a"></i>准</span>
           <span><i style="background:#ffd166"></i>略偏</span>
-          <span><i style="background:#ff9f43"></i>跑调</span>
           <span><i style="background:#ff4d5e"></i>偏差大</span>
-          <div class="spacer"></div>
-          <span id="rollTimecode">0.0s</span>
         </div>
+      </div>
+      <div class="now-note" id="nowNote">
+        <div class="now-label">此刻应唱</div>
+        <div class="now-row">
+          <b class="now-pitch" id="nowPitch">—</b>
+          <span class="now-cents" id="nowCents"></span>
+        </div>
+        <div class="now-sub" id="nowSub">跟着灰色参考线唱</div>
+      </div>
+    </div>
 
-        <div class="coach-bar" id="coachBar">
-          <span class="coach-icon">💡</span>
-          <span id="coachText">开启麦克风后，这里会实时提示你「偏高 / 偏低 / 刚好」</span>
+    <!-- 对比结果 -->
+    <div class="result-wrap hidden" id="resultWrap">
+      <div class="result-head">
+        <div>
+          <h2 id="resultTitle">对比解析结果</h2>
+          <p id="resultSub">—</p>
+        </div>
+        <div class="result-head-actions">
+          <button class="btn small" id="btnPlayA" disabled>▶ 参考</button>
+          <button class="btn small" id="btnPlayB" disabled>▶ 这次</button>
+          <button class="btn small ghost" id="btnStopAudio" disabled>■ 停止</button>
+          <button class="btn small ghost" id="btnAgain">再录一遍</button>
+        </div>
+      </div>
+
+      <div class="score-band" id="scoreBand"></div>
+
+      <div class="result-stats" id="resultStats"></div>
+
+      <div class="result-roll">
+        <canvas id="resultRoll"></canvas>
+      </div>
+
+      <div class="result-lower">
+        <div class="note-diag">
+          <div class="sub-title">逐音符诊断 <small id="diagCount"></small></div>
+          <div class="diag-list" id="diagList"></div>
+        </div>
+        <div class="worst-panel">
+          <div class="sub-title">最需要练的片段</div>
+          <div class="worst-list" id="worstList"></div>
+          <div class="sub-title" style="margin-top:14px">偏差分布</div>
+          <div class="hist-bars" id="histBars"></div>
         </div>
       </div>
     </div>
 
-    <!-- 曲目快选 -->
-    <div class="track-strip">
-      <div class="strip-title">快速选曲</div>
-      <div class="strip-list" id="trackStrip"></div>
-    </div>
   </section>
 
-  <!-- ══════════════════ 录音复盘 ══════════════════ -->
-  <section class="view" id="view-review">
-    <div class="review-grid">
+  <!-- ══════════ 侧栏：录音历史 ══════════ -->
+  <aside class="history panel" id="historyPanel">
+    <div class="panel-head">
+      <h2>我的录音</h2>
+      <span class="count" id="histCount">0</span>
+    </div>
+    <p class="hist-tip">选中两段即可「互相对比」：先点一条设为 <b>A 参考</b>，再点另一条设为 <b>B 对比</b>。</p>
 
-      <aside class="panel takes-panel">
-        <div class="panel-head">
-          <h2>我的录音</h2>
-          <span class="count" id="takeCount">0</span>
-        </div>
-        <div class="take-filter">
-          <select id="takeFilter">
-            <option value="">全部曲目</option>
-          </select>
-        </div>
-        <div class="take-list" id="takeList">
-          <div class="empty">还没有录音。回到「实时练唱」录一条。</div>
-        </div>
-        <div class="takes-footer">
-          <button class="btn tiny" id="btnClearTakes">清空全部</button>
-        </div>
-      </aside>
-
-      <div class="panel review-panel">
-        <div class="review-head">
-          <div>
-            <h2 id="reviewTitle">选择一条录音</h2>
-            <p id="reviewSub">可以看到逐句偏差、最准/最差的片段</p>
-          </div>
-          <div class="review-head-actions">
-            <button class="btn small" id="btnPlayTake" disabled>▶ 播放</button>
-            <button class="btn small ghost" id="btnStopTake" disabled>■ 停止</button>
-            <button class="btn small" id="btnRescore" disabled>重算分数</button>
-            <button class="btn small ghost" id="btnExportJSON" disabled>导出 JSON</button>
-            <button class="btn small ghost" id="btnExportWav" disabled>导出 WAV</button>
-          </div>
-        </div>
-
-        <div class="review-stats" id="reviewStats">
-          <div class="rstat">
-            <label>总分</label><b id="rsTotal">—</b>
-          </div>
-          <div class="rstat">
-            <label>准音率</label><b id="rsAcc">—</b>
-          </div>
-          <div class="rstat">
-            <label>覆盖度</label><b id="rsCover">—</b>
-          </div>
-          <div class="rstat">
-            <label>平均偏差</label><b id="rsDev">—</b>
-          </div>
-          <div class="rstat">
-            <label>稳定性 σ</label><b id="rsStab">—</b>
-          </div>
-          <div class="rstat">
-            <label>八度误判</label><b id="rsOct">—</b>
-          </div>
-        </div>
-
-        <div class="canvas-wrap review-canvas">
-          <canvas id="reviewRoll"></canvas>
-        </div>
-
-        <div class="review-bottom">
-          <div class="phrase-heat">
-            <div class="sub-title">逐句表现</div>
-            <div class="phrase-grid" id="phraseGrid">
-              <div class="empty">—</div>
-            </div>
-          </div>
-          <div class="coach-notes">
-            <div class="sub-title">诊断建议</div>
-            <ul id="coachNotes">
-              <li>选择一条录音查看分析</li>
-            </ul>
-          </div>
-        </div>
+    <div class="hist-select" id="histSelect" hidden>
+      <div class="sel-row">
+        <span class="sel-tag a">A 参考</span>
+        <b id="selA">—</b>
+      </div>
+      <div class="sel-row">
+        <span class="sel-tag b">B 对比</span>
+        <b id="selB">—</b>
+      </div>
+      <div class="sel-actions">
+        <button class="btn small primary" id="btnComparePair" disabled>对比这两段</button>
+        <button class="btn small ghost" id="btnClearPair">清除选择</button>
       </div>
     </div>
-  </section>
 
-  <!-- ══════════════════ 曲库 ══════════════════ -->
-  <section class="view" id="view-library">
-    <div class="lib-grid">
-      <div class="panel lib-all-panel">
-        <div class="panel-head">
-          <h2>全部曲目</h2>
-          <span class="count" id="libTotalCount">0</span>
-        </div>
-        <div class="lib-toolbar">
-          <input type="text" id="libFilter" placeholder="搜索曲名…">
-          <div class="pill-group">
-            <button class="chip active" data-libfilter="all">全部</button>
-            <button class="chip" data-libfilter="builtin">内置</button>
-            <button class="chip" data-libfilter="custom">我导入的</button>
-            <button class="chip" data-libfilter="broken">需处理</button>
-          </div>
-        </div>
-        <div class="lib-list" id="allTracksList">
-          <div class="empty">加载中…</div>
-        </div>
-        <div class="lib-foot">
-          <span class="lib-hint">点曲目切换 · 点 ✕ 删除</span>
-          <button class="btn tiny ghost" id="btnClearBroken" hidden>一键清理失效曲目</button>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-head">
-          <h2>导入歌曲</h2>
-          <button class="btn small primary" id="btnScanLib">扫描本地音乐库</button>
-        </div>
-
-        <!-- 本地音乐库浏览 -->
-        <div class="libscan" id="libScanPanel" hidden>
-          <div class="libscan-head">
-            <div class="libscan-info">
-              <b id="libScanTitle">正在扫描…</b>
-              <small id="libScanSub">读取 Music / Downloads / Desktop</small>
-            </div>
-            <div class="libscan-actions">
-              <button class="btn tiny" id="btnScanRescan">重新扫描</button>
-              <button class="btn tiny" id="btnScanClose">收起</button>
-            </div>
-          </div>
-
-          <div class="libscan-toolbar">
-            <input type="text" id="libScanFilter" placeholder="筛选文件名…">
-            <label class="switch tiny">
-              <input type="checkbox" id="libScanSelectAll">
-              <span>全选</span>
-            </label>
-            <span class="libscan-count" id="libScanCount">0 / 0</span>
-          </div>
-
-          <div class="libscan-list" id="libScanList"></div>
-
-          <div class="libscan-footer">
-            <label class="field inliner">
-              <span>导入后音高范围</span>
-              <select id="scanRange">
-                <option value="auto">自动</option>
-                <option value="male">男声</option>
-                <option value="female">女声</option>
-              </select>
-            </label>
-            <button class="btn primary" id="btnImportSelected" disabled>导入选中 (0)</button>
-          </div>
-
-          <div class="sep-row">
-            <label class="switch tiny">
-              <input type="checkbox" id="sepEnabled">
-              <span>先做人声分离（现场版更准，但很慢）</span>
-            </label>
-            <span class="sep-note" id="sepNote">检测中…</span>
-          </div>
-
-          <div class="import-progress" id="batchProgress" hidden>
-            <div class="bar"><div class="bar-fill" id="batchBar"></div></div>
-            <span id="batchStatus">—</span>
-          </div>
-        </div>
-
-        <div class="import-area" id="importArea">
-          <div class="drop-zone" id="dropZone">
-            <div class="dz-icon">🎵</div>
-            <p><b>拖入音频 / MIDI 文件</b></p>
-            <p class="muted">mp3 · wav · m4a · flac · ogg · mid</p>
-            <button class="btn small" id="btnPickFile">选择文件</button>
-            <input type="file" id="fileInput" accept="audio/*,.mid,.midi" multiple hidden>
-          </div>
-
-          <div class="import-opts">
-            <label class="field">
-              <span>曲目名称</span>
-              <input type="text" id="importTitle" placeholder="留空则用文件名">
-            </label>
-            <label class="field">
-              <span>分析方式</span>
-              <select id="importMode">
-                <option value="vocal">原曲人声（提取旋律）</option>
-                <option value="hum">纯人声参考（教唱用：录我的歌声当谱）</option>
-                <option value="midi">MIDI 文件</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>音高范围</span>
-              <select id="importRange">
-                <option value="auto">自动</option>
-                <option value="male">男声 (E2–E5)</option>
-                <option value="female">女声 (G3–C6)</option>
-              </select>
-            </label>
-            <label class="field checkbox">
-              <input type="checkbox" id="importSnap" checked>
-              <span>参考音高吸附到半音（更易跟唱）</span>
-            </label>
-          </div>
-
-          <div class="import-progress" id="importProgress" hidden>
-            <div class="bar"><div class="bar-fill" id="importBar"></div></div>
-            <span id="importStatus">分析中…</span>
-          </div>
-        </div>
-
-        <div class="panel-head sub">
-          <h2>当前曲目的歌词</h2>
-          <span class="lyr-state" id="lyrState">—</span>
-        </div>
-        <div class="lyr-panel">
-          <div class="lyr-row">
-            <input type="text" id="lyrTitleInput" placeholder="歌名（留空则从文件名推断）">
-            <input type="text" id="lyrArtistInput" placeholder="歌手">
-          </div>
-          <div class="lyr-row">
-            <button class="btn small primary" id="btnFetchLyrics">自动找歌词</button>
-            <button class="btn small" id="btnImportLrc">导入 .lrc</button>
-            <button class="btn small ghost" id="btnEditLyrics">手动编辑</button>
-            <button class="btn small ghost" id="btnClearLyrics">清除</button>
-            <input type="file" id="lrcFileInput" accept=".lrc,.txt" hidden>
-          </div>
-          <div class="lyr-status" id="lyrStatus">选一首歌，然后点「自动找歌词」</div>
-          <textarea id="lyrEditor" class="lyr-editor" placeholder="[00:12.34]第一句歌词&#10;[00:16.78]第二句歌词" hidden></textarea>
-          <div class="lyr-actions" id="lyrEditorActions" hidden>
-            <button class="btn tiny primary" id="btnSaveLyrics">保存</button>
-            <button class="btn tiny ghost" id="btnCancelLyrics">取消</button>
-          </div>
-        </div>
-
-        <div class="panel-head sub">
-          <h2>教唱模式（录入人声 → 清唱跟练）</h2>
-        </div>
-        <div class="vocal-panel hidden" id="vocalPanel">
-          <p class="vocal-desc">先录一段<strong>纯人声</strong>作为参考（它会自动解析出每个字的音高与节奏），再填歌词、对齐，然后清唱跟练，逐字点评「高了 / 低了 / 准、快了 / 慢了 / 没唱到」。</p>
-          <div class="vocal-actions">
-            <button class="btn small primary" id="btnVocalCapture" disabled>① 录入参考人声</button>
-            <button class="btn small" id="btnVocalAlign" disabled>② 对齐歌词</button>
-            <button class="btn small" id="btnVocalPractice" disabled>③ 开始清唱跟练</button>
-          </div>
-          <div class="vocal-status" id="vocalStatus"></div>
-
-          <div class="vocal-result hidden" id="vocalResultWrap">
-            <div class="sub-title">逐字点评</div>
-            <div class="vocal-summary" id="vocalSummary"></div>
-            <div class="vocal-list" id="vocalResultList"></div>
-          </div>
-        </div>
-      </div>
+    <div class="hist-list" id="histList">
+      <div class="empty">还没有录音。点左边「录入参考人声」开始。</div>
     </div>
-  </section>
+
+    <div class="hist-foot">
+      <button class="btn tiny ghost" id="btnImportAudio">导入音频文件</button>
+      <input type="file" id="importAudioInput" accept="audio/*" hidden>
+      <button class="btn tiny ghost" id="btnClearAll">清空全部</button>
+    </div>
+  </aside>
+
 </main>
-
-<!-- 设置抽屉 -->
-<div class="drawer-mask" id="drawerMask"></div>
-<aside class="drawer" id="settingsDrawer">
-  <div class="drawer-head">
-    <h2>设置</h2>
-    <button class="icon-btn" id="btnCloseSettings">✕</button>
-  </div>
-  <div class="drawer-body">
-    <div class="set-group">
-      <h3>评分</h3>
-      <label class="set-row">
-        <span>容差（音分）</span>
-        <input type="range" id="setTolerance" min="15" max="120" step="5">
-        <b id="setToleranceVal"></b>
-      </label>
-      <label class="set-row">
-        <span>检测置信度门限</span>
-        <input type="range" id="setConfidence" min="0.3" max="0.9" step="0.05">
-        <b id="setConfidenceVal"></b>
-      </label>
-    </div>
-
-    <div class="set-group">
-      <h3>音频</h3>
-      <label class="set-row">
-        <span>参考音音量</span>
-        <input type="range" id="setRefVol" min="0" max="1" step="0.05">
-        <b id="setRefVolVal"></b>
-      </label>
-      <label class="set-row">
-        <span>延迟补偿 (ms)</span>
-        <input type="range" id="setLatency" min="-300" max="300" step="5">
-        <b id="setLatencyVal"></b>
-      </label>
-    </div>
-
-    <div class="set-group">
-      <h3>数据</h3>
-      <p class="muted small">所有录音只存在这台电脑的浏览器里（IndexedDB），不会上传。</p>
-      <button class="btn small ghost" id="btnExportAll">导出全部录音数据</button>
-      <button class="btn small danger" id="btnWipe">清空所有数据</button>
-    </div>
-
-    <div class="set-group">
-      <h3>关于</h3>
-      <p class="muted small">
-        音高检测：YIN 算法（de Cheveigné &amp; Kawahara, 2002），FFT 加速，纯前端运行。<br>
-        评分模型：容差分档 + 覆盖度 + 稳定性加权。
-      </p>
-    </div>
-  </div>
-</aside>
 
 <!-- 帮助弹窗 -->
 <div class="modal-mask" id="helpMask">
@@ -493,17 +208,15 @@
     </div>
     <div class="modal-body">
       <h3>1. 让它听见你</h3>
-      <p>点「开启麦克风」。浏览器会请求权限。建议戴耳机——外放会让参考音被你自己的麦克风收进去，干扰判断。</p>
-      <h3>2. 选一首歌</h3>
-      <p>内置了六首公有领域练习曲。要唱自己的歌，去「曲库」导入：音频文件会被提取主旋律作为参考线，MIDI 文件则直接读音符。</p>
-      <h3>3. 看懂卷帘</h3>
-      <p><b>灰色横条</b>是原唱的音高位置，也就是「应该唱在哪」。<b>彩色光带</b>是你的声音。绿色=在容差内，黄=略偏，橙=跑调，红=差很远。竖虚线是「此刻」。</p>
-      <h3>4. 表盘</h3>
-      <p>指针居中=准。往左=唱低了（flat），往右=唱高了（sharp）。下面的数字是偏差音分，100 音分=一个半音。</p>
-      <h3>5. 录音复盘</h3>
-      <p>录完去「录音复盘」，能看到整首歌的轨迹、每一句得分、平均值偏差、稳定性。几条录音会按总分排序，直接看出哪次最准。</p>
-      <h3>6. 延迟</h3>
-      <p>如果发现你的线条总是领先或落后于灰条，调「延迟补偿」。戴蓝牙耳机通常需要 +100～200ms。</p>
+      <p>点右上角「开启麦克风」并允许权限。建议戴耳机，避免外放串进麦克风。</p>
+      <h3>2. 录入参考人声</h3>
+      <p>点「录入参考人声」，清唱/朗读任意一段（不用伴奏）。点「停止录音」后系统会<b>自动解析</b>这段人声——提取出每个音符的音高和节奏，作为对照的「谱」。</p>
+      <h3>3. 练唱 + 对比</h3>
+      <p>解析完成出现「练唱开始」。点它，再清唱一遍；唱完点「停止录音」，系统自动把这一遍和参考<b>对齐并对比</b>：总分、准音率、覆盖度，以及逐音符「偏高/偏低/准、快了/慢了/没唱到」。</p>
+      <h3>4. 历史任意互比</h3>
+      <p>每次录音都进右侧「我的录音」。点一条设为 <b>A 参考</b>，再点另一条设为 <b>B 对比</b>，点「对比这两段」——任意两段人声都能互相当标准比。也可以导入本地音频文件。</p>
+      <h3>说明</h3>
+      <p>歌词文本不是语音识别出来的；这里对比的是<b>纯人声旋律本身</b>（音高 + 节奏）。所有音频只存在这台电脑的浏览器里，不上传。</p>
     </div>
   </div>
 </div>

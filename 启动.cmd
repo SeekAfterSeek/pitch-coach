@@ -1,9 +1,10 @@
 @echo off
 chcp 65001 >nul
-title PitchCoach 练唱音准教练
+title 人声对比工作室
 cd /d "%~dp0"
 echo.
-echo   🎤 正在启动 PitchCoach ...
+echo   🎙️ 正在启动「人声对比工作室」...
+echo   启动后在浏览器打开 http://127.0.0.1:8756/
 echo.
 
 where node >nul 2>nul
