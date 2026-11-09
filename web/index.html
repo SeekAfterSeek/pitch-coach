@@ -77,58 +77,56 @@
         <div class="bar"><div class="bar-fill" id="parseBar"></div></div>
       </div>
 
-      <!-- 解析结果卡 -->
+      <!-- 解析结果卡：只显示 ① 调性 ② 歌词（可编辑） ③ 简谱 -->
       <div class="parsed-card hidden" id="parsedCard">
         <div class="parsed-head">
           <span class="ok-badge" id="parsedBadge">✓ 解析完成</span>
           <b id="parsedTitle">参考人声</b>
         </div>
-        <div class="parsed-stats" id="parsedStats"></div>
+
+        <div class="parsed-key" id="parsedKey">
+          <span class="pk-label">调性</span>
+          <b class="pk-name" id="keyName">—</b>
+          <span class="pk-jp" id="keyJianpu">—</span>
+        </div>
+
+        <div class="parsed-block">
+          <div class="pb-head">
+            <span>歌词</span>
+            <small>每行对应一句，可编辑；○ 是占位字</small>
+          </div>
+          <textarea id="lyricEditor" class="lyric-editor" spellcheck="false"></textarea>
+        </div>
+
+        <div class="parsed-block">
+          <div class="pb-head"><span>简谱</span><small id="scoreInfo">—</small></div>
+          <div class="jp-sheet" id="jpSheet"></div>
+        </div>
+
         <div class="parsed-actions">
           <button class="btn big primary" id="btnPractice">
             <span class="ico">⏺</span> 练唱开始
           </button>
           <button class="btn ghost" id="btnRerecord">重录参考</button>
         </div>
-        <p class="parsed-hint">点「练唱开始」后再对着麦清唱一遍；唱完点「停止录音」即自动对比解析。</p>
       </div>
     </div>
 
-    <!-- 实时卷帘（练唱时显示参考线 + 你的声音） -->
-    <div class="stage-roll hidden" id="stageRoll">
-      <div class="roll-toolbar">
-        <div class="pill-group">
-          <button class="chip active" data-mode="exact">标准 ±50¢</button>
-          <button class="chip" data-mode="strict">专业 ±25¢</button>
-          <button class="chip" data-mode="loose">宽松 ±100¢</button>
-        </div>
-        <div class="spacer"></div>
-        <span class="roll-tc" id="rollTimecode">0.0s</span>
-      </div>
-      <div class="canvas-wrap">
-        <canvas id="roll"></canvas>
-        <div class="roll-legend">
-          <span><i style="background:#96a6be"></i>参考旋律</span>
-          <span><i style="background:#25e08a"></i>准</span>
-          <span><i style="background:#ffd166"></i>略偏</span>
-          <span><i style="background:#ff4d5e"></i>偏差大</span>
-        </div>
-      </div>
-      <div class="now-note" id="nowNote">
-        <div class="now-label">此刻应唱</div>
-        <div class="now-row">
-          <b class="now-pitch" id="nowPitch">—</b>
-          <span class="now-cents" id="nowCents"></span>
-        </div>
-        <div class="now-sub" id="nowSub">跟着灰色参考线唱</div>
-      </div>
+    <!-- 练唱卡拉OK：3-2-1 倒计时 + 逐字歌词/简谱/节拍高亮（不显示其他） -->
+    <div class="karaoke hidden" id="karaoke">
+      <div class="k-count hidden" id="kCount"></div>
+      <div class="k-line" id="kPrevLine"></div>
+      <div class="k-line k-cur" id="kCurLine"></div>
+      <div class="k-line" id="kNextLine"></div>
+      <div class="k-progress"><div class="k-progress-fill" id="kProgressFill"></div></div>
+      <div class="k-hint" id="kHint"></div>
     </div>
 
-    <!-- 对比结果 -->
+    <!-- 对比结果：只显示一篇歌词，每字上下两排（原唱简谱 / 我唱简谱）+ 高低快慢 -->
     <div class="result-wrap hidden" id="resultWrap">
       <div class="result-head">
         <div>
-          <h2 id="resultTitle">对比解析结果</h2>
+          <h2 id="resultTitle">这一遍唱得怎么样</h2>
           <p id="resultSub">—</p>
         </div>
         <div class="result-head-actions">
@@ -138,27 +136,7 @@
           <button class="btn small ghost" id="btnAgain">再录一遍</button>
         </div>
       </div>
-
-      <div class="score-band" id="scoreBand"></div>
-
-      <div class="result-stats" id="resultStats"></div>
-
-      <div class="result-roll">
-        <canvas id="resultRoll"></canvas>
-      </div>
-
-      <div class="result-lower">
-        <div class="note-diag">
-          <div class="sub-title">逐音符诊断 <small id="diagCount"></small></div>
-          <div class="diag-list" id="diagList"></div>
-        </div>
-        <div class="worst-panel">
-          <div class="sub-title">最需要练的片段</div>
-          <div class="worst-list" id="worstList"></div>
-          <div class="sub-title" style="margin-top:14px">偏差分布</div>
-          <div class="hist-bars" id="histBars"></div>
-        </div>
-      </div>
+      <div class="lyric-result" id="lyricResult"></div>
     </div>
 
   </section>
@@ -209,12 +187,14 @@
     <div class="modal-body">
       <h3>1. 让它听见你</h3>
       <p>点右上角「开启麦克风」并允许权限。建议戴耳机，避免外放串进麦克风。</p>
-      <h3>2. 录入参考人声</h3>
-      <p>点「录入参考人声」，清唱/朗读任意一段（不用伴奏）。点「停止录音」后系统会<b>自动解析</b>这段人声——提取出每个音符的音高和节奏，作为对照的「谱」。</p>
-      <h3>3. 练唱 + 对比</h3>
-      <p>解析完成出现「练唱开始」。点它，再清唱一遍；唱完点「停止录音」，系统自动把这一遍和参考<b>对齐并对比</b>：总分、准音率、覆盖度，以及逐音符「偏高/偏低/准、快了/慢了/没唱到」。</p>
-      <h3>4. 历史任意互比</h3>
-      <p>每次录音都进右侧「我的录音」。点一条设为 <b>A 参考</b>，再点另一条设为 <b>B 对比</b>，点「对比这两段」——任意两段人声都能互相当标准比。也可以导入本地音频文件。</p>
+      <h3>2. 录入参考人声 → 只看三样</h3>
+      <p>点「录入参考人声」清唱/朗读一段，点「停止录音」后自动解析。结果只显示三块：<b>什么调</b>（C 大调 / A 小调 …）、<b>歌词</b>（可编辑，每行一句）、<b>简谱</b>（每个字的音符与节拍）。</p>
+      <h3>3. 练唱：像 K 歌一样</h3>
+      <p>点「练唱开始」后有 <b>3-2-1 倒计时</b>，然后逐字高亮：能看到每个字的<b>歌词、简谱音符、几拍</b>，跟着唱。唱完点「停止录音」。</p>
+      <h3>4. 结果：一篇歌词，上下两排</h3>
+      <p>结果显示整篇歌词。每个字上下两排：<b>上排原唱简谱、下排你唱的简谱</b>，并标出「偏高 / 偏低 / 快了 / 慢了 / 没唱到」。句末还有一句小结，比如「一闪一闪偏高、亮晶晶偏慢」。</p>
+      <h3>5. 历史任意互比</h3>
+      <p>每次录音都进右侧「我的录音」。点一条设为 <b>A 参考</b>，再点另一条设为 <b>B 对比</b>，点「对比这两段」——任意两段人声都能互相当标准比。</p>
       <h3>说明</h3>
       <p>歌词文本不是语音识别出来的；这里对比的是<b>纯人声旋律本身</b>（音高 + 节奏）。所有音频只存在这台电脑的浏览器里，不上传。</p>
     </div>

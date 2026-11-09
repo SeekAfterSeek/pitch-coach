@@ -47,34 +47,38 @@ async function evaluate(expr) {
 await send('Page.enable');
 await sleep(2000);
 
-const REF = (() => {
-  const a = []; const spec = [[60,0,1],[64,1,2],[67,2,3]];
-  for (const [m,s,e] of spec) for (let t=s;t<e;t+=0.02) a.push({t,midi:m,voiced:true,rms:0.2,confidence:0.9});
-  return JSON.stringify(a);
-})();
-const SHARP = (() => {
-  const a = []; const spec = [[61,0,1],[65,1,2],[68,2,3]];
-  for (const [m,s,e] of spec) for (let t=s;t<e;t+=0.02) a.push({t,midi:m,voiced:true,rms:0.2,confidence:0.9});
-  return JSON.stringify(a);
-})();
+const N = (spec) => { const a = []; for (const [m,s,e] of spec) for (let t=s;t<e;t+=0.02) a.push({t,midi:m,voiced:m>0,rms:0.2,confidence:0.9}); return JSON.stringify(a); };
+const REF = N([[60,0,0.5],[62,0.5,1],[64,1,1.5],[65,1.5,2],[67,3,3.5],[69,3.5,4],[71,4,4.5]]);
+const SHARP = N([[61,0,0.5],[63,0.5,1],[65,1,1.5],[66,1.5,2],[68,3,3.5],[70,3.5,4],[72,4,4.5]]);
 
 async function shot(name) {
-  const r = await send('Page.captureScreenshot', { format: 'png' });
+  const r = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
   const out = path.resolve('docs/' + name);
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, Buffer.from(r.data, 'base64'));
   console.log('  📸', out);
 }
 
-// 初始态
 await shot('studio-1-idle.png');
-// 解析完成
+// 解析卡（3 块），并填入歌词
 await evaluate(`window.__STUDIO.commitReferenceFrames(${REF})`);
-await sleep(400);
+await sleep(350);
+await evaluate(`window.__STUDIO.setLyrics('一闪一闪\\n亮晶晶')`);
+await sleep(100);
 await shot('studio-2-parsed.png');
-// 对比结果
+// K歌练唱视图（倒计时结束后的逐字高亮）
+await evaluate(`window.__STUDIO.previewKaraoke(0.6)`);
+await sleep(150);
+await evaluate(`window.__STUDIO.renderKaraokeAt(0.6)`);
+await evaluate(`document.getElementById('kCount').classList.add('hidden')`);
+await sleep(80);
+await shot('studio-3-karaoke.png');
+// 结果：一篇歌词上下两排
+await evaluate(`window.__STUDIO.commitReferenceFrames(${REF})`);
+await sleep(300);
+await evaluate(`window.__STUDIO.setLyrics('一闪一闪\\n亮晶晶')`);
 await evaluate(`window.__STUDIO.commitPracticeFrames(${SHARP})`);
-await sleep(400);
-await shot('studio-3-result.png');
+await sleep(300);
+await shot('studio-4-result.png');
 
 proc.kill('SIGKILL'); ws.close();
