@@ -248,6 +248,30 @@ check('对齐后唱到 ≥6 字（不是全漏）', sd.practiceSummary.sung >= 6
 check('对齐后漏唱 ≤1', sd.practiceSummary.missed <= 1, String(sd.practiceSummary.missed));
 check('结果标注已自动对齐', sd.practiceAlign?.aligned === true, JSON.stringify(sd.practiceAlign));
 
+console.log('\n── 小鸟音符对照图：飞得越高音越高，点鸟听音，播放亮列 ──');
+const nb = await evaluate(`(() => { const st = window.__STUDIO.getState();
+  return { cols: st.nbCols, birds: st.nbBirds, tops: st.nbColTops }; })()`);
+check('小鸟图有 7 列', nb.cols === 7, String(nb.cols));
+check('每列两只鸟（原唱+你唱）', nb.birds === 14, String(nb.birds));
+check('每列都有判定框色', nb.tops.every((t) => t.band !== ''), JSON.stringify(nb.tops.map(t=>t.band)));
+// 偏高清唱：你唱的鸟应整体位置更高（top% 更小）或同级——至少第 1 列原唱歌更高（my top < ref top 因偏高？）
+// 偏高 = 唱得比原唱高 → my 鸟 top 应 ≤ ref 鸟 top（越高越靠上）
+check('偏高列你唱鸟位置不低于原唱鸟', nb.tops.some((t) => t.my <= t.ref + 2), JSON.stringify(nb.tops));
+// 高音音符（第2句的 5 6 7，midi 67/69/71）小鸟应比低音（60/62/64）飞得高（top 更小）
+const hi = await evaluate(`(() => { const st = window.__STUDIO.getState();
+  const w = st.score.lines[1].units.map(u=>u.noteIdx); const tops = st.nbColTops;
+  return { refLow: tops[0].ref, refHigh: tops[Math.max(...w)].ref }; })()`);
+check('高音鸟飞得比低音鸟高（top 更小）', hi.refHigh < hi.refLow, JSON.stringify(hi));
+// 点鸟试听（无麦克风引擎时安全返回）
+const aud = await evaluate(`(() => { const st = window.__STUDIO.getState(); return st.auditionBird(0); })()`);
+check('点鸟试听返回音高信息', aud.midi > 0, JSON.stringify(aud));
+// 播放联动高亮：glowBirdAt(0.2) 应点亮第 0 列
+const glow = await evaluate(`(() => { window.__STUDIO.glowBirdAt(0.2);
+  return document.querySelectorAll('.nb-col.on').length; })()`);
+check('播放到 0.2s 亮起当前列', glow === 1, String(glow));
+await evaluate(`window.__STUDIO.glowBirdAt(99)`); // 越界不崩
+check('越界时刻不崩、无亮列', await evaluate(`document.querySelectorAll('.nb-col.on').length === 0`));
+
 console.log('\n── 历史任意两段互比 ──');
 const idA = await evaluate(`window.__STUDIO.importFrames(${REF}, '导入A')`);
 const idB = await evaluate(`window.__STUDIO.importFrames(${SHARP}, '导入B')`);
@@ -257,6 +281,7 @@ const s5 = await evaluate(`window.__STUDIO.getState()`);
 check('互比后 phase=result', s5.phase === 'result', s5.phase);
 check('互比结果有字', s5.lrCells > 0, String(s5.lrCells));
 check('互比偏高被识别', s5.practiceSummary.high > 0, String(s5.practiceSummary.high));
+check('互比结果也有小鸟图', s5.nbCols === s5.lrCells, `${s5.nbCols} vs ${s5.lrCells}`);
 
 console.log('\n── 播放按钮 / 无异常 ──');
 check('播放 A/B 按钮可用', await evaluate(`!document.getElementById('btnPlayA').disabled && !document.getElementById('btnPlayB').disabled`));

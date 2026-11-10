@@ -90,5 +90,9 @@ await evaluate(`window.__STUDIO.confirmLyrics()`);
 await evaluate(`window.__STUDIO.commitPracticeFrames(${SHARP})`);
 await sleep(300);
 await shot('studio-4-result.png');
+// 小鸟音符对照图：往上一点，把鸟图完整截出来
+await evaluate(`document.getElementById('noteBlocks').scrollIntoView({block:'center'})`);
+await sleep(120);
+await shot('studio-5-birds.png');
 
 proc.kill('SIGKILL'); ws.close();

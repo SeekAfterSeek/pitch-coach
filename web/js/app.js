@@ -12,7 +12,7 @@
  * 复用底层：audio.js、compare.js、notation.js、practice.js、history.js、util.js
  */
 
-import { AudioEngine, TakeRecorder, decodeFile, analyzeBuffer } from './audio.js';
+import { AudioEngine, TakeRecorder, decodeFile, analyzeBuffer, playMidiTone } from './audio.js';
 import { parseVocal } from './compare.js';
 import {
   detectKey, buildScore, flattenScore, jianpuHtml, jianpuTitle,
@@ -67,6 +67,10 @@ const S = {
   refAudioUrl: null,
   refPlayRAF: 0,
   refPlaying: false,
+  // 结果页小鸟音符图：当前亮起的列 + 单音试听的振荡器句柄
+  nbPlayingIdx: null,
+  nbPlayRAF: 0,
+  toneOsc: null,
 };
 
 /* ══════════════════ DOM ══════════════════ */
@@ -85,7 +89,7 @@ function cacheEls() {
     'scoreInfo','jpSheet','jpCellEditor','cellHint','btnPractice','btnRerecord',
     'karaoke','kCount','kPrevLine','kCurLine','kNextLine','kProgressFill','kHint',
     'resultWrap','resultTitle','resultSub','btnPlayA','btnPlayB','btnStopAudio','btnAgain',
-    'lyricResult',
+    'lyricResult','noteBlocks','recSpeech',
     'histCount','histSelect','selA','selB','btnComparePair','btnClearPair',
     'histList','btnImportAudio','importAudioInput','btnClearAll',
     'helpMask','btnCloseHelp','toastWrap',
@@ -168,12 +172,29 @@ async function startRecording(kind) {
   S.phase = kind === 'ref' ? 'rec-ref' : 'rec-practice';
   setStep(kind === 'ref' ? 1 : 3);
 
-  // 录参考人声时并行开语音识别，自动取到歌词
+  // 录参考人声时并行开语音识别，自动取到歌词；识别有动静就实时显示
   if (kind === 'ref' && speechAvailable()) {
     S.speechText = '';
+    el.recSpeech.classList.remove('hidden', 'listening');
+    el.recSpeech.innerHTML = '<span class="listening">🎤 正在识别歌词…（唱两句停一下识别更准；识别不到也能手填）</span>';
     S.speech = startSpeech({
-      onPartial: (t) => { S.speechText = t; },
-      onError: () => { /* 识别不到没关系，用户手动填 */ },
+      onPartial: (t) => {
+        S.speechText = t;
+        el.recSpeech.classList.add('listening');
+        el.recSpeech.innerHTML = t ? `<b>已识别：</b>${escapeHtml(t.slice(-40))}` : '<span class="listening">🎤 正在识别歌词…</span>';
+      },
+      onFinal: (t) => {
+        S.speechText = t;
+        el.recSpeech.innerHTML = `<b>已识别：</b>${escapeHtml(t.slice(-40))}`;
+      },
+      onError: (msg) => {
+        if (msg === 'not-allowed' || msg === 'service-not-allowed') {
+          el.recSpeech.textContent = '🎤 识别权限被拒，唱完手动填歌词即可';
+        } else if (msg === 'no-speech') {
+          el.recSpeech.classList.add('listening');
+          el.recSpeech.textContent = '🎤 没听到唱词（长间隔正常，会自动续听）…';
+        }
+      },
     });
   }
 
@@ -296,6 +317,7 @@ async function stopRecording() {
     if (t) S.speechText = t;
     S.speech = null;
   }
+  el.recSpeech.classList.add('hidden');
   show(el.recordStrip, false);
   show(el.karaoke, false);
   const frames = normalizeFrames(out.frames);
@@ -653,6 +675,7 @@ function renderResult() {
   el.btnPlayB.disabled = !S.lastPair.b;
 
   const lines = S.lastPractice.byLine;
+  renderNoteBirds();
   el.lyricResult.innerHTML = lines.map((line) => {
     const cells = line.units.map((u) => {
       const cls = u.status === 'missed' ? 'missed' : (u.band || 'perfect');
@@ -669,6 +692,105 @@ function renderResult() {
       <div class="lr-summary">${escapeHtml(lineSummary(line))}</div></div>`;
   }).join('');
   el.resultWrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/* ══════════════════ 小鸟音符对照图（不用曲线：高低位置 + 简谱数字） ══════════════════
+ * 借鉴全民K歌"逐音符标准答案 + 原唱/你的线对照"的判定与可视化思路，
+ * 但按要求不用曲线：每个音符是一只"小鸟"——唱得越高飞得越高，
+ * 鸟身上写简谱数字。上（青色）= 原唱鸟，下（绿色）= 你唱的鸟。
+ * 点小鸟反复听那一个音；播放 A/B 时当前列会亮。 */
+
+/** 一屏内的小鸟高度范围（音高 → top%）：给 2 个八度的显示窗口 */
+const BIRD_LO = 55;   // G3
+const BIRD_HI = 79;   // G5
+
+function birdTopPct(midi) {
+  const m = Math.max(BIRD_LO - 2, Math.min(BIRD_HI + 2, midi));
+  const p = (m - BIRD_LO) / (BIRD_HI - BIRD_LO);      // 0..1
+  return clamp((1 - p) * 88 + 6, 6, 94);              // 6%..94%，越高音越靠上
+}
+
+function stopBirdGlow() {
+  if (S.nbPlayingIdx == null) return;
+  el.noteBlocks.querySelectorAll('.nb-col.on').forEach((n) => n.classList.remove('on'));
+  S.nbPlayingIdx = null;
+  cancelAnimationFrame(S.nbPlayRAF);
+}
+
+/** 播放 A/B 音频时高亮"此刻唱到的那一列小鸟" */
+function glowBirdAt(t) {
+  const cols = [...el.noteBlocks.querySelectorAll('.nb-col')];
+  if (!cols.length) return;
+  const idx = cols.findIndex((c) => t >= Number(c.dataset.start) && t < Number(c.dataset.end));
+  el.noteBlocks.querySelectorAll('.nb-col.on').forEach((n) => n.classList.remove('on'));
+  if (idx >= 0) {
+    cols[idx].classList.add('on');
+    cols[idx].scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+  }
+}
+
+/** 点一只小鸟：重复试听那一个音（参考的音高；没唱到的列听原唱音） */
+function auditionBird(idx) {
+  const words = S.lastPractice?.words || [];
+  const w = words[idx];
+  if (!w) return;
+  const midi = w.userMidi ?? w.midi;
+  if (!S.engine?.ctx) { ensureMic().catch(() => {}); return; }
+  try { S.toneOsc?.stop?.(); } catch { /* noop */ }
+  playMidiTone(midi, S.engine.ctx, { dur: 0.5 });
+}
+
+/** 渲染小鸟音符对照图 */
+function renderNoteBirds() {
+  const words = S.lastPractice?.words || [];
+  stopBirdGlow();
+  if (!words.length) { el.noteBlocks.innerHTML = ''; return; }
+
+  const cellW = 64;
+  el.noteBlocks.innerHTML = words.map((w, i) => {
+    const refTop = birdTopPct(w.midi);
+    const band = w.band || 'perfect';
+    const sung = w.status === 'sung';
+    const myTop = sung ? birdTopPct(w.userMidi ?? w.midi) : refTop;
+    const devTxt = sung && w.dev != null ? `${w.dev > 0 ? '+' : ''}${Math.round(w.dev)}¢` : (sung ? '' : '没唱到');
+    return `<div class="nb-col ${sung ? '' : 'missed'}" data-idx="${i}" data-start="${w.start}" data-end="${w.end}"
+        title="第 ${i + 1} 音 · 原唱 ${escapeHtml(w.refNum)} · 你 ${sung ? escapeHtml(w.myNum || '—') : '没唱到'} · ${escapeHtml(w.pitch || '')}${devTxt ? ' ' + devTxt : ''} · 点此听音">
+      <div class="nb-bird ref" style="top:${refTop}%">🐦<b class="nb-jp">${escapeHtml(w.refNum)}</b></div>
+      <div class="nb-bird my ${band}" style="top:${myTop}%">🐦<b class="nb-jp">${sung ? escapeHtml(w.myNum || '—') : '—'}</b></div>
+      <div class="nb-ch">${escapeHtml(w.char || '○')}</div>
+    </div>`;
+  }).join('');
+
+  el.noteBlocks.style.setProperty('--nb-cell-w', cellW + 'px');
+  // 点列 = 反复试听那一个音
+  el.noteBlocks.querySelectorAll('.nb-col').forEach((col) => {
+    col.addEventListener('click', () => auditionBird(Number(col.dataset.idx)));
+  });
+}
+
+/** 播放结果页音频（A=参考 / B=这次）并联动小鸟列高亮 */
+async function playResultAudio(which) {
+  const id = which === 'a' ? S.lastPair.a : S.lastPair.b;
+  if (!id) return;
+  const blob = await getVocalAudio(id);
+  if (!blob) { toast('这段没有可播放的音频', 'err'); return; }
+  stopAudio();
+  stopBirdGlow();
+  if (S.audioUrl) URL.revokeObjectURL(S.audioUrl);
+  S.audioUrl = URL.createObjectURL(blob);
+  if (!S.audio) {
+    S.audio = new Audio();
+    S.audio.addEventListener('ended', () => { el.btnStopAudio.disabled = true; stopBirdGlow(); });
+  }
+  S.audio.src = S.audioUrl;
+  await S.audio.play().catch((e) => { toast('播放失败：' + e.message, 'err'); return; });
+  el.btnStopAudio.disabled = false;
+  const tick = () => {
+    if (!S.audio || S.audio.paused || S.audio.ended) return;
+    glowBirdAt(S.audio.currentTime);
+    S.nbPlayRAF = requestAnimationFrame(tick);
+  };
+  tick();
 }
 
 /* ══════════════════ 历史：任意两段互比 ══════════════════ */
@@ -805,6 +927,7 @@ async function importAudioFile(file) {
 function stopAudio() {
   if (S.audio) { S.audio.pause(); S.audio.currentTime = 0; }
   el.btnStopAudio.disabled = true;
+  stopBirdGlow();
 }
 async function playVocal(id) {
   const blob = await getVocalAudio(id);
@@ -828,6 +951,7 @@ function playBlob(blob) {
 
 function resetToIdle() {
   stopRefPlayback();
+  stopBirdGlow();
   S.phase = 'idle';
   S.refVocal = null; S.refBlob = null; S.parsed = null; S.key = null; S.score = null; S.lyricText = '';
   S.charMap = null; S.groups = null;
@@ -876,9 +1000,9 @@ function bind() {
   el.btnPlayRef.addEventListener('click', () => playRefAudio().catch((e) => toast('播放失败：' + e.message, 'err')));
   el.btnStopRef.addEventListener('click', stopRefPlayback);
 
-  el.btnPlayA.addEventListener('click', () => S.lastPair.a && playVocal(S.lastPair.a));
-  el.btnPlayB.addEventListener('click', () => S.lastPair.b && playVocal(S.lastPair.b));
-  el.btnStopAudio.addEventListener('click', stopAudio);
+  el.btnPlayA.addEventListener('click', () => playResultAudio('a').catch((e) => toast('播放失败：' + e.message, 'err')));
+  el.btnPlayB.addEventListener('click', () => playResultAudio('b').catch((e) => toast('播放失败：' + e.message, 'err')));
+  el.btnStopAudio.addEventListener('click', () => { stopAudio(); stopBirdGlow(); });
 
   el.btnComparePair.addEventListener('click', () => comparePair().catch((e) => {
     hideParse(); toast('对比失败：' + e.message, 'err', 6000);
@@ -932,6 +1056,7 @@ function installTestHooks() {
       };
     },
     stopRefPlayback,
+    glowBirdAt,
     // 模拟"本轮存下了原声音频"：让播放按钮可用（CDP 里无真实 MediaRecorder）
     simulateRefBlob() {
       S.refBlob = new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'audio/webm' });
@@ -988,6 +1113,19 @@ function installTestHooks() {
         resultText: el.lyricResult.textContent.trim(),
         lrCells: el.lyricResult.querySelectorAll('.lr-cell').length,
         lrLines: el.lyricResult.querySelectorAll('.lr-line').length,
+        nbCols: el.noteBlocks.querySelectorAll('.nb-col').length,
+        nbBirds: el.noteBlocks.querySelectorAll('.nb-bird').length,
+        nbColTops: [...el.noteBlocks.querySelectorAll('.nb-col')].map((c) => ({
+          ref: Number(c.querySelector('.nb-bird.ref')?.style.top.replace('%', '') || 0),
+          my: Number(c.querySelector('.nb-bird.my')?.style.top.replace('%', '') || 0),
+          band: c.querySelector('.nb-bird.my')?.className.replace('nb-bird my', '').trim() || '',
+        })),
+        // 单音试听 / 播放联动
+        auditionBird(i) {
+          auditionBird(i);
+          return { idx: i, midi: S.lastPractice?.words?.[i]?.midi, hasCtx: !!S.engine?.ctx };
+        },
+        glowBirdAt,
         historyCount: S.history.length,
         practiceSummary: S.lastPractice?.summary,
         practiceAlign: S.lastPractice?.align,

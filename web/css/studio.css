@@ -142,6 +142,10 @@ body {
 .rec-info span { color: var(--text-2); font-variant-numeric: tabular-nums; }
 .meter { flex: 1; height: 8px; border-radius: 999px; background: rgba(255,255,255,.06); overflow: hidden; }
 .meter-fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--green), var(--yellow), var(--red)); transition: width .06s; }
+.rec-speech { flex-basis: 100%; text-align: left; font-size: 11.5px; color: var(--text-2);
+  border-top: 1px dashed var(--line); padding-top: 6px; min-height: 16px; }
+.rec-speech.listening { color: var(--cyan); }
+.rec-speech b { color: var(--green); }
 
 /* ── 解析条 ── */
 .parse-strip {
@@ -282,6 +286,56 @@ body {
 .lr-cell.missed .lr-my { color: var(--red); }
 .lr-cell.missed .lr-tag { color: var(--red); font-weight: 600; }
 .lr-summary { margin-top: 8px; font-size: 11px; color: var(--text-2); text-align: right; }
+
+/* ── 小鸟音符对照图：飞得越高音越高，无曲线 ── */
+.nb-legend { font-size: 11px; color: var(--text-3); line-height: 1.7; margin-bottom: 8px; }
+.nb-legend b { color: var(--text-2); }
+.nb-key { display: inline-block; padding: 0 8px; border-radius: 999px; font-size: 10px; margin: 0 2px; }
+.nb-key.ref { background: rgba(63,208,224,.14); color: var(--cyan); border: 1px solid rgba(63,208,224,.4); }
+.nb-key.my { background: rgba(37,224,138,.14); color: var(--green); border: 1px solid rgba(37,224,138,.4); }
+.nb-wrap {
+  display: flex; align-items: stretch; gap: 0; overflow-x: auto; padding: 6px 4px 8px;
+  border-radius: 11px; border: 1px solid var(--line); background: #0a1119; margin-bottom: 12px;
+  position: relative;
+}
+.nb-wrap::before { /* 五线式的静音高度参考线：只留 4 条极淡横线，帮助目测高低 */
+  content: ''; position: absolute; left: 0; right: 0; top: 0; bottom: 0; pointer-events: none;
+  background:
+    linear-gradient(rgba(120,150,190,.05), rgba(120,150,190,.05)) 0 26%/100% 1px no-repeat,
+    linear-gradient(rgba(120,150,190,.05), rgba(120,150,190,.05)) 0 50%/100% 1px no-repeat,
+    linear-gradient(rgba(120,150,190,.05), rgba(120,150,190,.05)) 0 74%/100% 1px no-repeat;
+}
+.nb-col {
+  flex: 0 0 auto; width: var(--nb-cell-w, 64px); min-height: 230px; position: relative;
+  border-right: 1px dashed rgba(120,150,190,.12); cursor: pointer; transition: background .12s;
+}
+.nb-col:last-child { border-right: 0; }
+.nb-col:hover { background: rgba(255,255,255,.03); }
+.nb-col.on { background: rgba(37,224,138,.10); }
+.nb-bird {
+  position: absolute; transform: translateY(-50%);
+  font-size: 17px; line-height: 1; padding: 3px 5px; border-radius: 8px;
+  display: inline-flex; flex-direction: column; align-items: center; gap: 0;
+  transition: top .25s ease, box-shadow .15s; white-space: nowrap;
+}
+.nb-bird.ref { left: 10%; color: var(--cyan); text-shadow: 0 0 10px rgba(63,208,224,.25); }
+.nb-bird.my  { left: 58%; color: var(--lime); }
+.nb-jp { font: 700 11px/1.2 "PingFang SC", monospace; color: #fff; background: rgba(0,0,0,.4);
+  border-radius: 5px; padding: 0 4px; margin-top: -2px; }
+.nb-bird.ref .nb-jp { color: var(--cyan); }
+.nb-bird.my .nb-jp { color: var(--lime); }
+/* 判定框色：只描你的那只鸟 */
+.nb-bird.my.perfect { box-shadow: 0 0 0 1.5px rgba(37,224,138,.55); }
+.nb-bird.my.ok { box-shadow: 0 0 0 1.5px rgba(255,209,102,.55); }
+.nb-bird.my.sharp { box-shadow: 0 0 0 1.5px rgba(255,159,67,.65); }
+.nb-bird.my.off { box-shadow: 0 0 0 1.5px rgba(255,77,94,.7); }
+.nb-col.on .nb-bird { filter: drop-shadow(0 0 8px rgba(37,224,138,.8)); transform: translateY(-50%) scale(1.15); }
+.nb-col.missed .nb-bird.my { opacity: .35; filter: grayscale(.6); }
+.nb-ch {
+  position: absolute; left: 0; right: 0; bottom: 2px; text-align: center;
+  font: 700 13px/1.4 "PingFang SC", monospace; color: var(--text-2);
+}
+@media (max-width: 900px) { .nb-col { width: 46px; min-height: 190px; } }
 
 /* ── 历史侧栏 ── */
 .history { display: flex; flex-direction: column; min-height: 0; }

@@ -8,7 +8,25 @@
  */
 
 import { PitchDetector } from './pitch.js';
-import { hzToMidi } from './util.js';
+import { hzToMidi, midiToHz } from './util.js';
+
+/** 播放某个 MIDI 音高（给"点小鸟听那个音"用）：
+ *  用 AudioContext 的 OscillatorNode 发一短促纯音，无需任何资源文件。 */
+export function playMidiTone(midi, ctx, { dur = 0.45, when = 0, gain = 0.22 } = {}) {
+  if (!ctx || !Number.isFinite(midi) || midi <= 0) return;
+  const t0 = ctx.currentTime + when;
+  const osc = ctx.createOscillator();
+  const g = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.value = midiToHz(midi);
+  g.gain.setValueAtTime(0, t0);
+  g.gain.linearRampToValueAtTime(gain, t0 + 0.02);           // 快起音，不爆音
+  g.gain.setValueAtTime(gain, t0 + Math.max(0.03, dur - 0.08));
+  g.gain.linearRampToValueAtTime(0, t0 + dur);               // 收尾渐弱
+  osc.connect(g).connect(ctx.destination);
+  osc.start(t0);
+  osc.stop(t0 + dur + 0.05);
+}
 
 /** 麦克风约束：必须关掉自动增益/降噪/回声消除，否则音高会被 DSP 拉偏 */
 export const MIC_CONSTRAINTS = {

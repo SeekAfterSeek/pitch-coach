@@ -1,12 +1,17 @@
 /**
- * 歌词识别（浏览器原生 Web Speech API，无需联网服务在本进程内）
+ * 歌词识别（浏览器原生 Web Speech API）
  * ═══════════════════════════════════════════════════════════
  * 在"录入参考人声"录音的同时开一个 SpeechRecognition，把唱/念的词
- * 转成文本，解析完成后自动填进歌词框。识别不到就退回占位符，
- * 用户始终可以手动编辑并「确定」。
+ * 转成文本，解析完成后自动填进歌词框。
  *
- * 说明：Chrome 的 webkitSpeechRecognition 在部分环境需要联网、且对唱歌
- * 识别率有限，所以它是"辅助自动填词"，不是唯一来源——编辑框永远可改。
+ * 实战加固（针对"录了很多识别不到歌词"）：
+ *  1. Chrome 的识别器有"几秒没声就自动 onend"的习惯 → 自动重启，
+ *     直到主动 stop() 为止（整段录音期间保持活着）
+ *  2. 报错不放弃：'no-speech' / 'aborted' / 'network' 全部静默重启，
+ *     只有 'not-allowed'（权限被拒）才真正停
+ *  3. 歌词是断续唱的 → final 结果很可能一句一句蹦，全部累积不覆盖；
+ *     每次变化都回调 onPartial，解析卡上能看到"正在识别…"
+ *  4. 识别是辅助路径：识别不到永远可手动填 / 粘贴整段歌词
  */
 
 /** 是否可用 */
@@ -24,42 +29,71 @@ export function speechAvailable() {
 export function startSpeech(opts = {}) {
   if (!speechAvailable()) { opts.onError?.('此浏览器不支持语音识别，请手动填写歌词'); return null; }
   const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const rec = new Ctor();
-  rec.lang = opts.lang || 'zh-CN';
-  rec.continuous = true;
-  rec.interimResults = true;
-  rec.maxAlternatives = 1;
 
   let finalText = '';
   let partial = '';
-  let active = true;
+  let active = true;       // 用户还没点停止
+  let engineOn = false;    // 识别器当前是否在跑
+  let restartTimer = 0;
+  let rec = null;
 
-  rec.onresult = (e) => {
-    let interim = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      const r = e.results[i];
-      const txt = r[0]?.transcript || '';
-      if (r.isFinal) finalText += txt;
-      else interim += txt;
+  const spawn = () => {
+    if (!active) return;
+    try { rec = new Ctor(); } catch { return; }
+    rec.lang = opts.lang || 'zh-CN';
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+
+    rec.onresult = (e) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        const txt = r[0]?.transcript || '';
+        if (r.isFinal) {
+          // 每段 final 独立累积（歌词断续唱，一句一句蹦）
+          finalText += txt;
+        } else {
+          interim += txt;
+        }
+      }
+      partial = interim;
+      opts.onPartial?.(finalText + interim);
+      if (interim === '' ) {
+        // 只在有新 final 落地时通知 onFinal，避免每帧刷
+        opts.onFinal?.(finalText);
+      }
+    };
+    rec.onerror = (e) => {
+      const err = e.error || '识别出错';
+      // not-allowed = 权限被拒，别再重启了；其余静默
+      if (err === 'not-allowed' || err === 'service-not-allowed') {
+        active = false;
+        opts.onError?.(err);
+      } else {
+        opts.onError?.(err);
+      }
+    };
+    rec.onend = () => {
+      engineOn = false;
+      if (!active) return;
+      // Chrome 唱歌间隔大 / 短语后几秒就 onend → 自动重启保持活着
+      clearTimeout(restartTimer);
+      restartTimer = setTimeout(() => { if (active) { try { rec.start(); engineOn = true; } catch { /* noop */ } } }, 350);
+    };
+
+    try { rec.start(); engineOn = true; } catch (e) {
+      opts.onError?.('无法启动语音识别：' + e.message);
+      return;
     }
-    partial = interim;
-    opts.onPartial?.(finalText + interim);
   };
-  rec.onerror = (e) => {
-    // 'no-speech' 之类不必打断流程，交给用户手动填
-    opts.onError?.(e.error || '识别出错');
-  };
-  rec.onend = () => { active = false; };
-
-  try { rec.start(); } catch (e) {
-    opts.onError?.('无法启动语音识别：' + e.message);
-    return null;
-  }
+  spawn();
 
   return {
     stop() {
       active = false;
-      try { rec.stop(); } catch { /* noop */ }
+      clearTimeout(restartTimer);
+      try { rec?.stop(); } catch { /* noop */ }
       return (finalText + partial).trim();
     },
     active: () => active,
