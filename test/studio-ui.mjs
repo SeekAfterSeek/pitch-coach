@@ -307,6 +307,25 @@ check('局部拖拍 → 部分列没开花（0 < merged < 7）', nbD.merged > 0 
   JSON.stringify({ merged: nbD.merged, dx: nbD.tops.map(t=>t.dx) }));
 check('拖拍字的鸟往右错开（dx > 0）', nbD.tops.some((t) => t.dx > 5), JSON.stringify(nbD.tops.map(t=>t.dx)));
 
+console.log('\n── 听歌识曲 · 取歌词 · 勾选要唱的句子 ──');
+check('有「听歌识曲·取歌词」按钮', await evaluate(`(() => !!document.getElementById('btnIdentify'))()`));
+// mock：直接注入一首歌的整首歌词（绕过网络），进入选句界面
+const lineCount = await evaluate(`window.__STUDIO.injectLyricsForPick('一闪一闪亮晶晶\\n满天都是小星星\\n\\n挂在天上放光明\\n好像许多小眼睛')`);
+check('选句界面有 4 个可勾选句子（空行不选）', lineCount === 4, String(lineCount));
+// 勾选第 0、2 行 → 写进歌词框 → 自动按节奏重排
+const used = await evaluate(`window.__STUDIO.pickLineAndUse([0, 2])`);
+check('勾选的句子写入歌词框（每句一行）', used.editor.split('\n').length >= 2, used.editor);
+check('取词后自动按节奏重排（状态提示）', /按原声节奏重新匹配|取.*句歌词/.test(used.status), used.status);
+check('重排后 charMap 长度 = 7 个音符', await evaluate(`window.__STUDIO.getState().charMap?.length === 7`));
+// mock：注入候选列表（识曲命中后那一屏）
+const candN = await evaluate(`window.__STUDIO.injectSongCandidates([
+  { trackName: '小星星', artistName: '儿歌', albumName: '', duration: 180, plainLyrics: '一闪一闪亮晶晶\\n满天都是小星星' },
+  { trackName: '小星星变奏曲', artistName: '莫扎特', albumName: '', duration: 200, plainLyrics: '○' }
+])`);
+check('候选列表渲染 2 条', candN === 2, String(candN));
+await evaluate(`window.__STUDIO.openSongPicker && document.getElementById('btnCloseSong').click()`);
+check('关闭弹窗', await evaluate(`!document.getElementById('songMask').classList.contains('open')`));
+
 console.log('\n── 历史任意两段互比 ──');
 const idA = await evaluate(`window.__STUDIO.importFrames(${REF}, '导入A')`);
 const idB = await evaluate(`window.__STUDIO.importFrames(${SHARP}, '导入B')`);

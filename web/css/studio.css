@@ -433,6 +433,29 @@ body {
 .modal-body p { margin: 0 0 6px; color: var(--text-2); font-size: 12.5px; line-height: 1.75; }
 .modal-body b { color: var(--text); }
 
+/* ── 识曲/歌词候选弹窗 ── */
+.song-modal { width: min(560px, 100%); }
+.song-step { font-size: 12.5px; color: var(--text-2); }
+.song-cand { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 9px;
+  border: 1px solid var(--line); background: rgba(255,255,255,.02); margin-bottom: 6px; cursor: pointer; transition: .15s; }
+.song-cand:hover { border-color: rgba(37,224,138,.5); }
+.song-cand.sel { border-color: rgba(37,224,138,.65); background: rgba(37,224,138,.08); }
+.song-cand img { width: 40px; height: 40px; border-radius: 7px; object-fit: cover; background: #16202c; }
+.sc-main { flex: 1; min-width: 0; }
+.sc-main b { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-main small { color: var(--text-3); font-size: 11px; }
+.sc-dur { font-size: 11px; color: var(--text-2); flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.song-lines { max-height: 300px; overflow-y: auto; margin: 10px 0; border: 1px solid var(--line); border-radius: 9px; padding: 8px; }
+.song-line { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 7px; cursor: pointer; transition: .12s; }
+.song-line:hover { background: rgba(255,255,255,.04); }
+.song-line.sel { background: rgba(37,224,138,.14); }
+.song-line input { accent-color: var(--green); }
+.song-line span { font-size: 13px; color: var(--text); flex: 1; }
+.song-line.blank { cursor: default; height: 6px; }
+.song-query { flex: 1; padding: 8px 12px; border-radius: 9px; border: 1px solid var(--line-strong);
+  background: #0c141d; color: var(--text); font: 13px/1.4 inherit; }
+.song-query:focus { outline: none; border-color: var(--green); }
+
 /* ── Toast ── */
 .toast-wrap { position: fixed; right: 18px; bottom: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 100; }
 .toast {

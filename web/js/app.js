@@ -21,6 +21,10 @@ import {
 import { scorePracticeWords, groupWordsByLine, lineSummary } from './practice.js';
 import { alignTextToPhrases, realignLyricsToScore, cleanLyricChars } from './lyrics.js';
 import { startSpeech, speechAvailable } from './speech.js';
+import {
+  identifySong, searchLyrics, searchLyricsByQuery, getLyricsById,
+  getAuddToken, setAuddToken, splitSongLines, lrcToPlainLines,
+} from './song-identify.js';
 import { uid, fmtTime, clamp } from './util.js';
 import {
   saveVocal, listVocals, getVocal, getVocalAudio,
@@ -86,6 +90,8 @@ function cacheEls() {
     'parsedCard','parsedBadge','parsedTitle','parsedKey','keyName','keyJianpu',
     'btnPlayRef','btnStopRef','refPlayHint','refPlayFill',
     'lyricEditor','btnRecognize','btnRealign','btnConfirmLyrics','lyricStatus',
+    'btnIdentify','songMask','btnCloseSong','songTitle','songStep','songResult','songLines',
+    'btnUseLines','manualQuery','btnSearchQuery',
     'scoreInfo','jpSheet','jpCellEditor','cellHint','btnPractice','btnRerecord',
     'karaoke','kCount','kPrevLine','kCurLine','kNextLine','kProgressFill','kHint','kBirds',
     'resultWrap','resultTitle','resultSub','btnPlayA','btnPlayB','btnStopAudio','btnAgain',
@@ -599,6 +605,139 @@ function recognizeLyrics() {
   toast('这一段没识别到歌词，直接手动填即可；也可「重录参考」再试', '', 4500);
 }
 
+/* ══════════════════ 听歌识曲 · 选歌词 ══════════════════ */
+
+function showSongModal(open) {
+  el.songMask.classList.toggle('open', !!open);
+  if (open) return;
+  el.songResult.innerHTML = '';
+  el.songLines.innerHTML = '';
+  el.songLines.classList.add('hidden');
+  el.btnUseLines.classList.add('hidden');
+  el.manualQuery.classList.add('hidden');
+  el.btnSearchQuery.classList.add('hidden');
+}
+
+/** 渲染歌词候选列表（识曲命中 / 手动搜索共用） */
+function renderSongCandidates(rows, hint) {
+  el.songStep.textContent = hint || '找到这些候选，点一首取歌词：';
+  el.songResult.innerHTML = rows.length ? '' : '<p class="song-step">没找到匹配的歌词，试试下面手动搜索。</p>';
+  el.songResult.querySelectorAll('.song-cand').forEach((n) => n.remove());
+  for (const r of rows.slice(0, 6)) {
+    const d = document.createElement('div');
+    d.className = 'song-cand';
+    d.innerHTML = `
+      ${r._art ? `<img src="${escapeHtml(r._art)}" alt="">` : ''}
+      <div class="sc-main"><b>${escapeHtml(r.trackName)}</b><small>${escapeHtml(r.artistName)}${r.albumName ? ' · ' + escapeHtml(r.albumName) : ''}</small></div>
+      <span class="sc-dur">${r.duration ? fmtTime(r.duration) : ''}</span>`;
+    d.addEventListener('click', () => {
+      el.songResult.querySelectorAll('.song-cand.sel').forEach((x) => x.classList.remove('sel'));
+      d.classList.add('sel');
+      showLinePicker(r);
+    });
+    el.songResult.appendChild(d);
+  }
+  if (rows.length) {
+    el.manualQuery.classList.remove('hidden');
+    el.btnSearchQuery.classList.remove('hidden');
+  }
+}
+
+/** 选中一首 → 展示整首歌词的句子清单，用户勾选要唱的几句 */
+function showLinePicker(rec) {
+  const plain = (rec.plainLyrics || '').trim();
+  const lines = plain ? splitSongLines(plain) : (rec.syncedLyrics ? splitSongLines(lrcToPlainLines(rec.syncedLyrics).join('\n')) : []);
+  if (!lines.filter((l) => !l.blank).length) {
+    el.songStep.textContent = '这首没有可用的歌词文本，请手输歌词';
+    return;
+  }
+  el.songStep.textContent = `《${rec.trackName}》· ${rec.artistName} —— 勾选你要唱的几句（顺序就是演唱顺序），然后点「用选中的句子」`;
+  el.songLines.innerHTML = lines.map((l) => l.blank
+    ? '<div class="song-line blank"></div>'
+    : `<label class="song-line"><input type="checkbox" value="${escapeHtml(l.text)}"><span>${escapeHtml(l.text)}</span></label>`).join('');
+  el.songLines.classList.remove('hidden');
+  el.btnUseLines.classList.remove('hidden');
+  el.songLines.dataset.track = `${rec.trackName}|${rec.artistName}`;
+}
+
+/** 把勾选的句子写进歌词框并按节奏重排 */
+function useSelectedLines() {
+  const picked = [...el.songLines.querySelectorAll('input:checked')]
+    .map((i) => i.value.trim()).filter(Boolean);
+  if (!picked.length) { toast('先勾选至少一句歌词', 'err'); return; }
+  el.lyricEditor.value = picked.join('\n');
+  showSongModal(false);
+  onLyricEdit();
+  // 直接按标点/节奏重排入谱，用户只需核对再确定
+  realignLyrics();
+  el.lyricStatus.textContent = `已从《${el.songLines.dataset.track.split('|')[0]}》取 ${picked.length} 句歌词并按节奏匹配，请核对后点「确定歌词」`;
+  el.lyricStatus.className = 'lyric-status ok';
+  toast(`已取 ${picked.length} 句歌词`, 'ok');
+}
+
+/** 主流程：识曲 → 取歌词候选 → 选句 */
+async function identifyAndPick() {
+  showSongModal(true);
+  el.songTitle.textContent = '🎧 听歌识曲 · 选歌词';
+  el.songResult.innerHTML = '';
+  el.songLines.classList.add('hidden');
+  el.btnUseLines.classList.add('hidden');
+
+  // 没配 token：先引导注册/填 token，同时给手动搜索的口子
+  if (!getAuddToken()) {
+    el.songStep.innerHTML = `两步走：<br>① 到 <a href="https://dashboard.audd.io/" target="_blank" rel="noreferrer" style="color:var(--cyan)">dashboard.audd.io</a> 免费注册一个 api_token（听歌识曲用）<br>
+      ② 把 token 粘进来（只存在你本机浏览器）：<br>
+      <input type="text" id="auddTokenInput" class="song-query" style="margin-top:8px" placeholder="粘贴 AudD api_token">
+      <div class="sel-actions" style="margin-top:8px">
+        <button class="btn small primary" id="btnSaveToken">保存并识曲</button>
+        <button class="btn small ghost" id="btnSkipIdentify">跳过识曲，直接搜歌词</button>
+      </div>`;
+    el.manualQuery.classList.add('hidden');
+    el.btnSearchQuery.classList.add('hidden');
+    const saveBtn = document.getElementById('btnSaveToken');
+    const skipBtn = document.getElementById('btnSkipIdentify');
+    saveBtn?.addEventListener('click', async () => {
+      const t = document.getElementById('auddTokenInput').value.trim();
+      if (!t) { toast('先粘贴 token', 'err'); return; }
+      setAuddToken(t);
+      el.songStep.textContent = '正在识别你唱的是哪首歌…';
+      await runIdentify();
+    });
+    skipBtn?.addEventListener('click', async () => {
+      el.songStep.textContent = '直接搜歌词：输入歌名或关键词';
+      el.manualQuery.classList.remove('hidden');
+      el.btnSearchQuery.classList.remove('hidden');
+      el.manualQuery.focus();
+    });
+    return;
+  }
+  await runIdentify();
+}
+
+async function runIdentify() {
+  if (!S.refBlob) {
+    el.songStep.textContent = '本轮没有存下原声音频（用测试钩子注入的帧没有音频），直接搜歌词即可';
+    el.manualQuery.classList.remove('hidden');
+    el.btnSearchQuery.classList.remove('hidden');
+    return;
+  }
+  el.songStep.textContent = '🎧 正在把录音片段发给听歌识曲（几秒钟）…';
+  const m = await identifySong(S.refBlob);
+  if (!m) {
+    el.songStep.textContent = '没识别出是哪首歌（清唱/哼唱识曲命中率有限）。直接搜歌词：输入歌名或关键词';
+    el.manualQuery.classList.remove('hidden');
+    el.btnSearchQuery.classList.remove('hidden');
+    el.manualQuery.focus();
+    return;
+  }
+  el.songStep.innerHTML = `识别到：<b>${escapeHtml(m.title)}</b> · ${escapeHtml(m.artist)} —— 正在取歌词…`;
+  const rows = await searchLyrics({ title: m.title, artist: m.artist, duration: m.duration });
+  if (rows.length) { renderSongCandidates(rows, `识别到《${m.title}》· ${m.artist}，点一首取歌词：`); return; }
+  // 歌名直搜没有 → 再用「歌名 歌手」当关键词搜
+  const rows2 = await searchLyricsByQuery(`${m.title} ${m.artist}`);
+  renderSongCandidates(rows2, `识别到《${m.title}》· ${m.artist}，但精确匹配没找到歌词，这些是近似结果：`);
+}
+
 /* ══════════════════ 解析卡：播放刚录的原声 + 逐音符亮格 ══════════════════ */
 
 function clearRefHighlight() {
@@ -1100,6 +1239,18 @@ function bind() {
   el.btnRecognize.addEventListener('click', recognizeLyrics);
   el.btnRealign.addEventListener('click', realignLyrics);
   el.btnConfirmLyrics.addEventListener('click', confirmLyrics);
+  // 听歌识曲 → 取歌词 → 勾选要唱的句子
+  el.btnIdentify.addEventListener('click', () => identifyAndPick().catch((e) => { showSongModal(false); toast('识曲失败：' + e.message, 'err', 6000); }));
+  el.btnCloseSong.addEventListener('click', () => showSongModal(false));
+  el.songMask.addEventListener('click', (e) => { if (e.target === el.songMask) showSongModal(false); });
+  el.btnUseLines.addEventListener('click', useSelectedLines);
+  el.btnSearchQuery.addEventListener('click', async () => {
+    const q = el.manualQuery.value.trim();
+    if (!q) { toast('输入歌名或关键词', 'err'); return; }
+    el.songStep.textContent = '正在搜索歌词…';
+    const rows = await searchLyricsByQuery(q);
+    renderSongCandidates(rows, `「${q}」的候选：`);
+  });
   // 解析卡里回放刚录的原声：边听边看简谱逐音符亮格
   el.btnPlayRef.addEventListener('click', () => playRefAudio().catch((e) => toast('播放失败：' + e.message, 'err')));
   el.btnStopRef.addEventListener('click', stopRefPlayback);
@@ -1161,6 +1312,28 @@ function installTestHooks() {
     },
     stopRefPlayback,
     glowBirdAt,
+    // ── 听歌识曲钩子：CDP 测试用 mock 数据驱动选句流程 ──
+    openSongPicker: () => identifyAndPick(),
+    // 直接注入歌词候选（绕过网络）
+    injectSongCandidates(rows) {
+      showSongModal(true);
+      renderSongCandidates(rows, '（测试注入的候选）');
+      return document.querySelectorAll('.song-cand').length;
+    },
+    // 直接注入一首歌的整首歌词，进入选句界面
+    injectLyricsForPick(plain, trackName = '测试歌', artistName = '测试歌手') {
+      showLinePicker({ trackName, artistName, plainLyrics: plain, syncedLyrics: null, duration: 0 });
+      return el.songLines.querySelectorAll('input[type="checkbox"]').length;
+    },
+    // 勾选第 i 行句子（0-based，跳过空行）并应用
+    pickLineAndUse(idxList) {
+      const boxes = [...el.songLines.querySelectorAll('input[type="checkbox"]')];
+      for (const i of idxList) if (boxes[i]) boxes[i].checked = true;
+      useSelectedLines();
+      return { editor: el.lyricEditor.value, status: el.lyricStatus.textContent };
+    },
+    setAuddToken: (t) => { setAuddToken(t); return true; },
+    identifySong: (blob) => identifySong(blob),
     // 模拟"本轮存下了原声音频"：让播放按钮可用（CDP 里无真实 MediaRecorder）
     simulateRefBlob() {
       S.refBlob = new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'audio/webm' });
@@ -1211,6 +1384,7 @@ function installTestHooks() {
         lyricStatus: el.lyricStatus.textContent, lyricsConfirmed: S.lyricsConfirmed,
         hasRecognizeBtn: !!el.btnRecognize, hasRealignBtn: !!el.btnRealign,
         hasConfirmBtn: !!el.btnConfirmLyrics, hasPlayRefBtn: !!el.btnPlayRef,
+        hasIdentifyBtn: !!el.btnIdentify,
         refBlob: !!S.refBlob,
         jpLegend: (document.querySelector('.jp-legend') || {}).textContent,
         jpSheet: el.jpSheet.textContent.trim(), jpCells: el.jpSheet.querySelectorAll('.jp-cell').length,

@@ -106,6 +106,7 @@
           </div>
           <textarea id="lyricEditor" class="lyric-editor" spellcheck="false"></textarea>
           <div class="lyric-tools">
+            <button class="btn tiny" id="btnIdentify">🎧 听歌识曲·取歌词</button>
             <button class="btn tiny" id="btnRecognize">🎤 识别歌词</button>
             <button class="btn tiny" id="btnRealign">🔄 重新解析匹配</button>
             <button class="btn tiny primary" id="btnConfirmLyrics">✓ 确定歌词</button>
@@ -240,6 +241,26 @@
       <p>每次录音都进右侧「我的录音」。点一条设为 <b>A 参考</b>，再点另一条设为 <b>B 对比</b>，点「对比这两段」——任意两段人声都能互相当标准比。</p>
       <h3>说明</h3>
       <p>歌词可自动识别、手动填写、按节奏重排、逐格修改，最终由你「确定」；对比的是<b>纯人声旋律本身</b>（音高 + 节奏）。所有音频只存在这台电脑的浏览器里，不上传。</p>
+    </div>
+  </div>
+</div>
+
+<!-- 识曲/歌词候选弹窗 -->
+<div class="modal-mask" id="songMask">
+  <div class="modal song-modal">
+    <div class="modal-head">
+      <h2 id="songTitle">🎧 听歌识曲 · 选歌词</h2>
+      <button class="icon-btn" id="btnCloseSong">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="song-step" id="songStep">正在识别你唱的是哪首歌…</p>
+      <div id="songResult"></div>
+      <div id="songLines" class="song-lines hidden"></div>
+      <div class="sel-actions">
+        <button class="btn small primary hidden" id="btnUseLines">✓ 用选中的句子</button>
+        <input type="text" id="manualQuery" class="song-query hidden" placeholder="歌名拿不准？直接搜关键词，如「月亮代表」">
+        <button class="btn small ghost hidden" id="btnSearchQuery">搜索歌词</button>
+      </div>
     </div>
   </div>
 </div>
