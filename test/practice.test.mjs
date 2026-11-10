@@ -2,7 +2,7 @@
  * practice.js 单元自测：逐字对比（原唱简谱 / 我唱简谱 / 高低 / 快慢 / 漏唱）
  */
 import { detectKey, buildScore, flattenScore } from '../web/js/notation.js';
-import { scorePracticeWords, groupWordsByLine, lineSummary, practiceBand, estimatePracticeOffset } from '../web/js/practice.js';
+import { scorePracticeWords, groupWordsByLine, lineSummary, practiceBand, estimatePracticeOffset, detectTransposition } from '../web/js/practice.js';
 
 let passed = 0, failed = 0;
 function ok(name, cond, extra = '') {
@@ -100,6 +100,50 @@ console.log('\n── practiceBand ──');
   ok('40¢=ok', practiceBand(40,50)==='ok');
   ok('90¢=sharp', practiceBand(90,50)==='sharp');
   ok('200¢=off', practiceBand(200,50)==='off');
+}
+
+console.log('\n── detectTransposition 整体移调判定 ──');
+{
+  // 原唱 C 调 123，你 D 调也唱 123 → 全部 +100¢ → 移调+2半音，音程全对 = 没跑调
+  const w1 = [
+    { dev: 100, status: 'sung' }, { dev: 102, status: 'sung' }, { dev: 98, status: 'sung' },
+    { dev: 101, status: 'sung' }, { dev: 99, status: 'sung' },
+  ];
+  const t1 = detectTransposition(w1, 50);
+  ok('整体+100¢ 识别为移调+1半音', t1.applied === true && t1.shiftSemi === 1, JSON.stringify(t1));
+  ok('音程全对 = 没跑调', t1.consistent === true, t1.verdict);
+  ok('判定文案说"没跑调"', /没跑调/.test(t1.verdict), t1.verdict);
+
+  // 原唱 122（音程不同），你唱 123 → +100,+100,0 → 移调+2半音但残差=0和100 → 跑调
+  const w2 = [
+    { dev: 100, status: 'sung' }, { dev: 100, status: 'sung' }, { dev: 0, status: 'sung' },
+    { dev: 100, status: 'sung' }, { dev: 100, status: 'sung' },
+  ];
+  const t2 = detectTransposition(w2, 50);
+  ok('移调但音程错 → 跑调', t2.applied === true && t2.consistent === false, JSON.stringify(t2));
+  ok('判定文案说"跑调"', /跑调/.test(t2.verdict) && !/没跑调/.test(t2.verdict), t2.verdict);
+  ok('标出错几个字 1/5', t2.residualOff === 1 && t2.residualTotal === 5, JSON.stringify(t2));
+
+  // 整体低 1 半音：全 -100¢ → 移调-1，音程对
+  const w3 = [
+    { dev: -100, status: 'sung' }, { dev: -98, status: 'sung' }, { dev: -102, status: 'sung' },
+    { dev: -100, status: 'sung' }, { dev: -101, status: 'sung' },
+  ];
+  const t3 = detectTransposition(w3, 50);
+  ok('整体-100¢ 识别为移调-1半音', t3.applied === true && t3.shiftSemi === -1, JSON.stringify(t3));
+  ok('低一个调唱对了 = 没跑调', t3.consistent === true, t3.verdict);
+
+  // 同调：偏差全在 ±50 内 → 不判移调
+  const w4 = [{ dev: 10 }, { dev: -20 }, { dev: 30 }, { dev: -5 }, { dev: 15 }].map((x) => ({ ...x, status: 'sung' }));
+  const t4 = detectTransposition(w4, 50);
+  ok('同调不误判移调', t4.applied === false, JSON.stringify(t4));
+  ok('同调全准 = consistent', t4.consistent === true);
+
+  // 同调但个别字跑：偏差 [+10,-20,30,150,-5]
+  const w5 = [{ dev: 10 }, { dev: -20 }, { dev: 30 }, { dev: 150 }, { dev: -5 }].map((x) => ({ ...x, status: 'sung' }));
+  const t5 = detectTransposition(w5, 50);
+  ok('同调个别跑调不判移调', t5.applied === false, JSON.stringify(t5));
+  ok('同调跑调 → inconsistent', t5.consistent === false);
 }
 
 console.log(`\npractice.test: ${passed} passed, ${failed} failed`);

@@ -193,7 +193,64 @@ export function scorePracticeWords(units, key, takeFrames, opts = {}) {
     meanTimingMs: sung.length ? mean(sung.map((w) => w.timingMs)) : 0,
   };
 
-  return { words, summary, align };
+  // —— 调性对比：你整体是不是换了个调在唱 ——
+  // 中位偏差 ≈ ±100¢ 的整数倍（±50¢ 容差）→ 你整体移了 N 个半音；
+  // 折算回去后逐字残差都小 = 你是"整体移调但没跑调"；
+  // 折算后残差仍大 = 旋律本身唱错了（跑调）。
+  const transposition = detectTransposition(sung, tol);
+
+  return { words, summary, align, transposition };
+}
+
+/**
+ * 检测整体移调：你把整首搬高了/搬低了几个半音，旋律形状本身唱对了没有。
+ *
+ * 判定逻辑（正是用户要的）：
+ *   原唱 C 调唱 123，你 D 调也唱 123 → 每字偏差都是 +100¢ → 移调 +2 半音，
+ *   折算后逐字残差 ≈ 0 → 「整体移高 2 半音，音程关系正确 = 没跑调」
+ *   原唱唱 122，你唱 123 → 偏差是 [+100,+100,0] → 中位 +100 但残差 50¢
+ *   → 「整体移高 2 半音，但第 2 音音程错了 = 跑调」
+ *
+ * @param {Array} words 已唱字的诊断（含 dev、refNum/myNum）
+ * @param {number} tol 音准容差（音分）
+ * @returns {{shiftSemi:number, applied:boolean, consistent:boolean,
+ *            residualOff:number, residualTotal:number,
+ *            verdict:string, detail:string}}
+ */
+export function detectTransposition(words, tol = 50) {
+  if (!words || words.length < 3) {
+    return { shiftSemi: 0, applied: false, consistent: true, residualOff: 0, residualTotal: 0,
+      verdict: '', detail: '样本太少，不做调性判定' };
+  }
+  const devs = words.map((w) => w.dev).sort((a, b) => a - b);
+  const med = devs[Math.floor(devs.length / 2)];
+  // 中位偏差接近某个整百（半音）才认为有整体移调意图
+  const shiftSemi = Math.round(med / 100);
+  const cand = shiftSemi * 100;
+  const applied = shiftSemi !== 0 && Math.abs(med - cand) <= tol && words.filter((w) => Math.abs(w.dev - cand) <= tol).length >= words.length * 0.6;
+
+  if (!applied) {
+    // 没有整体移调：逐字判定就是最终判定
+    const off = words.filter((w) => Math.abs(w.dev) > tol).length;
+    return { shiftSemi: 0, applied: false, consistent: off === 0,
+      residualOff: off, residualTotal: words.length,
+      verdict: off === 0 ? '' : '',
+      detail: off === 0 ? '同调演唱' : '同调演唱，个别字跑调（见下面逐字标注）' };
+  }
+
+  // 有整体移调：折算回去看"音程关系"唱对没有
+  const residual = words.map((w) => w.dev - cand);
+  const residualOff = residual.filter((d) => Math.abs(d) > tol).length;
+  const consistent = residualOff === 0;
+  const dir = shiftSemi > 0 ? '高' : '低';
+  const verdict = consistent
+    ? `整体移${dir} ${Math.abs(shiftSemi)} 半音，音程全对 = 没跑调`
+    : `整体移${dir} ${Math.abs(shiftSemi)} 半音，但 ${residualOff}/${words.length} 字音程错了 = 跑调`;
+  return {
+    shiftSemi, applied: true, consistent,
+    residualOff, residualTotal: words.length,
+    verdict, detail: verdict,
+  };
 }
 
 /** 把逐字结果按原来的行重新分组，供"显示一篇歌词"用 */

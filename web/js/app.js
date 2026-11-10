@@ -87,9 +87,9 @@ function cacheEls() {
     'btnPlayRef','btnStopRef','refPlayHint','refPlayFill',
     'lyricEditor','btnRecognize','btnRealign','btnConfirmLyrics','lyricStatus',
     'scoreInfo','jpSheet','jpCellEditor','cellHint','btnPractice','btnRerecord',
-    'karaoke','kCount','kPrevLine','kCurLine','kNextLine','kProgressFill','kHint',
+    'karaoke','kCount','kPrevLine','kCurLine','kNextLine','kProgressFill','kHint','kBirds',
     'resultWrap','resultTitle','resultSub','btnPlayA','btnPlayB','btnStopAudio','btnAgain',
-    'lyricResult','noteBlocks','recSpeech',
+    'lyricResult','noteBlocks','recSpeech','keyVerdict',
     'histCount','histSelect','selA','selB','btnComparePair','btnClearPair',
     'histList','btnImportAudio','importAudioInput','btnClearAll',
     'helpMask','btnCloseHelp','toastWrap',
@@ -199,43 +199,43 @@ async function startRecording(kind) {
   }
 
   if (kind === 'practice') {
-    // 进入练唱：先 3-2-1 倒计时，再开始逐字卡拉OK + 录音
-    startCountdown(() => loop());
+    // 进入练唱：先铺上原唱鸟起伏图（歌词高低起伏一眼可见），
+    // 随后逐句用三个闪烁点提示进句
+    show(el.karaoke, true);
+    renderKaraokeBirds();
+    el.kPrevLine.innerHTML = '';
+    el.kNextLine.innerHTML = '';
+    el.kCurLine.innerHTML = '';
+    el.kHint.textContent = '准备… 看到三个点亮起倒数，全灭就开口进句';
+    el.kProgressFill.style.width = '0%';
+    loop();
   } else {
     loop();
   }
 }
 
-/** 3-2-1 倒计时：显示在卡拉OK面板，结束后执行 cb（开始画逐字）。
- *  参照全民K歌：每句开头先给「第 N 句 · 3-2-1 这一句开始」。 */
-function startCountdown(cb) {
-  show(el.karaoke, true);
-  el.kPrevLine.innerHTML = '';
-  el.kNextLine.innerHTML = '';
-  el.kCurLine.innerHTML = '';
-  el.kHint.textContent = '第 1 句 · 准备…';
-  el.kProgressFill.style.width = '0%';
-  S.countdown = 3;
-  const first = S.score?.lines?.[0];
-  const tick = () => {
-    if (S.countdown <= 0) {
-      el.kCount.classList.add('hidden');
-      el.kHint.textContent = '跟着高亮的字唱';
-      cb();
-      return;
-    }
-    el.kCount.classList.remove('hidden');
-    el.kCount.textContent = String(S.countdown);
-    const label = first ? `第 ${first.phraseNo} 句 · ${S.countdown} · 这一句开始` : `${S.countdown} · 准备`;
-    el.kHint.textContent = label;
-    // 重新触发动画
-    el.kCount.style.animation = 'none';
-    void el.kCount.offsetWidth;
-    el.kCount.style.animation = '';
-    S.countdown -= 1;
-    S.countdownRAF = setTimeout(tick, 1000);
-  };
-  tick();
+/** 练唱视图里的原唱鸟起伏图：只画当前句 ± 前后各一句的鸟，
+ *  当前句的鸟亮色大号、前后句淡化——唱到哪看哪，不被整首干扰。 */
+function renderKaraokeBirds(li = 0) {
+  const lines = S.score?.lines || [];
+  if (!lines.length) { el.kBirds.innerHTML = ''; return; }
+  const show = [li - 1, li, li + 1].filter((k) => k >= 0 && k < lines.length);
+  const pxPerSec = 26;
+  const beatSec = S.score?.beatSec || 0.5;
+  const durPx = (ms) => clamp(Math.round((ms / 1000) / beatSec * pxPerSec), 6, 120);
+  el.kBirds.innerHTML = show.map((k) => {
+    const line = lines[k];
+    const isCur = k === li;
+    const cells = line.units.map((u) => {
+      const top = birdTopPct(u.midi);
+      const cloud = durPx(Math.max(1, (u.end - u.start) * 1000));
+      return `<div class="k-bird-col" data-note-idx="${u.noteIdx}" data-start="${u.start}" data-end="${u.end}">
+        <div class="nb-bird ref" style="top:${top}%">🐦<b class="nb-jp">${escapeHtml(u.jianpu.symbol)}</b><span class="nb-cloud ref" style="width:${cloud}px"></span></div>
+        <div class="k-bird-ch">${escapeHtml(u.char || '○')}</div>
+      </div>`;
+    }).join('');
+    return `<div class="k-bird-line${isCur ? ' cur' : ''}">${cells}</div>`;
+  }).join('');
 }
 
 function loop() {
@@ -283,25 +283,39 @@ function updateKaraoke(vt) {
   el.kCurLine.innerHTML = renderLine(cur, true);
   el.kNextLine.innerHTML = renderLine(next, false);
 
+  // 换句时刷新鸟图（当前句的鸟大号高亮）；句内给正在唱的那个鸟描边
+  if (el.kBirds.dataset.line !== String(cur.index)) {
+    renderKaraokeBirds(cur.index);
+    el.kBirds.dataset.line = String(cur.index);
+  }
+  el.kBirds.querySelectorAll('.k-bird-col.glow').forEach((n) => n.classList.remove('glow'));
+  const birdCol = el.kBirds.querySelector(`.k-bird-col[data-note-idx="${cur.units.find((u) => vt >= u.start && vt < u.end)?.noteIdx}"]`);
+  if (birdCol) birdCol.classList.add('glow');
+
   // 整句进度条
   const span = Math.max(0.1, cur.end - cur.start);
   const p = clamp((vt - cur.start) / span, 0, 1);
   el.kProgressFill.style.width = (p * 100).toFixed(1) + '%';
 
-  // 「什么时候开始唱下一句」：距下一句起音 ≤1s 时给 3-2-1 提词
-  if (next && vt >= cur.end - 1.0 && vt < next.phraseStart) {
+  // 「什么时候开始唱这一句」：距句起音 ≤3s 时显示三个闪烁点倒数，
+  // 点一颗颗熄灭，全灭 = 进句开口。开始唱后显示"本句还剩 X s"。
+  const dots = (n) => Array.from({ length: 3 }, (_, i) =>
+    `<i class="k-dot${i < n ? '' : ' off'}"></i>`).join('');
+  if (next && vt >= cur.end && vt < next.phraseStart) {
+    // 句间空档：等下一句，三个点倒数到 next 起音
     const left = Math.max(0, next.phraseStart - vt);
-    const n = Math.max(1, Math.ceil(left));
-    el.kHint.textContent = `下一句（第 ${next.phraseNo} 句）· ${n} · 准备起唱`;
-  } else if (vt < cur.start) {
+    const n = Math.min(3, Math.ceil(left));
+    el.kHint.innerHTML = `第 ${next.phraseNo} 句 · ${dots(n)} ${n} · 点灭即开口`;
+  } else if (vt < cur.phraseStart - 0.05 && cur.phraseStart - vt <= 3.0) {
+    // 开头还没到第一句
     const left = Math.max(0, cur.phraseStart - vt);
-    const n = Math.max(1, Math.ceil(left));
-    el.kHint.textContent = `第 ${cur.phraseNo} 句 · ${n} · 这一句开始`;
-  } else if (vt < cur.end) {
+    const n = Math.min(3, Math.ceil(left));
+    el.kHint.innerHTML = `第 ${cur.phraseNo} 句 · ${dots(n)} ${n} · 点灭即开口`;
+  } else if (vt >= cur.phraseStart - 0.05 && vt < cur.end) {
     const toNext = Math.max(0, cur.end - vt);
-    el.kHint.textContent = `第 ${cur.phraseNo} 句 · 本句还剩 ${toNext.toFixed(1)}s`;
+    el.kHint.innerHTML = `第 ${cur.phraseNo} 句 · <b class="k-go">唱！</b> 本句还剩 ${toNext.toFixed(1)}s`;
   } else {
-    el.kHint.textContent = '跟着高亮的字唱';
+    el.kHint.innerHTML = '跟着高亮的字唱';
   }
 }
 
@@ -400,11 +414,54 @@ function renderParsedCard(status, statusKind = '') {
   else el.refPlayHint.textContent = '听着原声看简谱，唱到哪个音符就会亮哪一格';
   renderJianpuSheet();
   renderCellEditor();
+  renderBirdsRefOnly();     // 解析完就给一张「原唱鸟起伏图」——旋律长什么样先看见
   el.heroIcon.textContent = '🎼';
   el.heroTitle.textContent = '解析完成';
   el.heroDesc.textContent = '边听原声看简谱亮格 → 改好歌词点「重新解析匹配」→ 逐格核对 → 点「确定歌词」再练唱。';
   show(el.parsedCard, true);
   show(el.stageActions, false);
+}
+
+/** 解析卡里的「原唱鸟起伏图」：只有青色原唱歌排成旋律形状，
+ *  播放原声时当前鸟亮起；练唱后同一张图会补上你的粉色鸟。 */
+function renderBirdsRefOnly() {
+  const units = flattenScore(S.score);
+  stopBirdGlow();
+  if (!units.length) { el.noteBlocks.innerHTML = ''; return; }
+  const pxPerSec = 26;
+  const beatSec = S.score?.beatSec || 0.5;
+  const durPx = (ms) => clamp(Math.round((ms / 1000) / beatSec * pxPerSec), 6, 140);
+  el.noteBlocks.innerHTML = units.map((u, i) => {
+    const top = birdTopPct(u.midi);
+    const cloud = durPx(Math.max(1, (u.end - u.start) * 1000));
+    return `<div class="nb-col" data-idx="${i}" data-note-idx="${u.noteIdx}" data-start="${u.start}" data-end="${u.end}"
+        title="第 ${i + 1} 音 · ${escapeHtml(u.jianpu.symbol)} · ${u.beat} · 起音 ${u.start.toFixed(1)}s · 点此听音">
+      <div class="nb-bird ref" style="top:${top}%">🐦<b class="nb-jp">${escapeHtml(u.jianpu.symbol)}</b><span class="nb-cloud ref" style="width:${cloud}px"></span></div>
+      <div class="nb-ch">${escapeHtml(u.char || '○')}</div>
+    </div>`;
+  }).join('');
+  el.noteBlocks.style.setProperty('--nb-cell-w', '64px');
+  // 点鸟听那一个音；播放原声时当前鸟亮起
+  el.noteBlocks.querySelectorAll('.nb-col').forEach((col) => {
+    col.addEventListener('click', () => {
+      const u = units[Number(col.dataset.idx)];
+      if (!u || !S.engine?.ctx) return;
+      try { S.toneOsc?.stop?.(); } catch { /* noop */ }
+      playMidiTone(u.midi, S.engine.ctx, { dur: 0.5 });
+    });
+  });
+}
+
+/** 播放原声时：解析卡的鸟图亮当前列；结果页的鸟图亮当前列 */
+function glowRefBirdAt(t) {
+  const cols = [...el.noteBlocks.querySelectorAll('.nb-col')];
+  if (!cols.length) return;
+  const idx = cols.findIndex((c) => t >= Number(c.dataset.start) && t < Number(c.dataset.end));
+  el.noteBlocks.querySelectorAll('.nb-col.on').forEach((n) => n.classList.remove('on'));
+  if (idx >= 0) {
+    cols[idx].classList.add('on');
+    cols[idx].scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+  }
 }
 
 /** 简谱表：按乐句分行，每字显示简谱符号 + 节拍 + 歌词字。
@@ -669,9 +726,21 @@ function renderResult() {
 
   const st = S.lastPractice.summary;
   const al = S.lastPractice.align;
+  const tp = S.lastPractice.transposition;
   el.resultTitle.textContent = '这一遍唱得怎么样';
   el.resultSub.textContent = `共 ${st.total} 字 · 唱到 ${st.sung} · 偏高 ${st.high} · 偏低 ${st.low} · 偏快 ${st.early} · 偏慢 ${st.late} · 没唱到 ${st.missed}`
     + (al?.aligned ? ` · 已自动对齐 ${Math.round(-al.shift * 1000)}ms` : '');
+  // 调性判定横幅：你整体换调了吗？换调后音程还对吗？
+  if (tp?.applied) {
+    const ok = tp.consistent;
+    el.keyVerdict.className = 'key-verdict show ' + (ok ? 'good' : 'bad');
+    el.keyVerdict.innerHTML = ok
+      ? `🎯 ${escapeHtml(tp.verdict)} —— 你用自己的调唱对了旋律（原唱 ${escapeHtml(S.key?.name || '')}）`
+      : `⚠️ ${escapeHtml(tp.verdict)} —— 旋律形状错了（原唱 ${escapeHtml(S.key?.name || '')}），看下面逐字标注`;
+  } else {
+    el.keyVerdict.className = 'key-verdict show good';
+    el.keyVerdict.innerHTML = `🎯 同调演唱（${escapeHtml(S.key?.name || '')}）${st.high + st.low === 0 ? '，没跑调' : '，个别字偏高/偏低见下方标注'}`;
+  }
   el.btnPlayA.disabled = !S.lastPair.a;
   el.btnPlayB.disabled = !S.lastPair.b;
 
@@ -1107,12 +1176,15 @@ function installTestHooks() {
       return el.lyricEditor.value;
     },
     speechAvailable,
-    // 预览 K 歌视图（不依赖麦克风）：显示倒计时，并把指定时刻的逐字高亮画出来
+    // 预览 K 歌视图（不依赖麦克风）：铺鸟图 + 进句提示，并把指定时刻的逐字高亮画出来
     previewKaraoke(atSec = 0.2) {
       show(el.parsedCard, false);
       show(el.resultWrap, false);
       show(el.stageActions, false);
-      startCountdown(() => updateKaraoke(atSec));
+      show(el.karaoke, true);
+      renderKaraokeBirds(0);
+      el.kBirds.dataset.line = '0';
+      updateKaraoke(atSec);
       return { hidden: el.karaoke.classList.contains('hidden') };
     },
     renderKaraokeAt(atSec) { updateKaraoke(atSec); return el.kCurLine.innerHTML; },

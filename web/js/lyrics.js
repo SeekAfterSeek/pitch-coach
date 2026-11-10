@@ -349,33 +349,40 @@ export function alignTextToPhrases(text, lineNoteCounts) {
 /**
  * 把用户改过的歌词，按第一次录音解析出的「节奏骨架」重新钉到每个音符上。
  *
- * 与 alignTextToPhrases 的区别（后者只按"每句音符数"比例硬切）：
- *   - 乐句边界来自音频里音符间的大空档（groupPhrases 的结果）
- *   - 连续歌词按【每句实际演唱时长】占比切分，而不是按音符个数占比
- *     —— 唱得久的句子理应分到更多字，这才叫"按节奏"
- *   - 用户在框里手动换的行数正好等于乐句数时，完全尊重用户的分句
- *   - 句内字数 > 音符数：多出的字并进【时值最长】的音符（长音拖字/转音）
- *     字数 ≤ 音符数：一字一音符，其余补 ○（用户可在逐格编辑器里补字）
+ * 分句优先级（谁先命中用谁）：
+ *   1. **用户标点分句**：歌词里写「一闪一闪，亮晶晶。」——逗号/句号/问号等
+ *      就是分句指令，每个标点 = 一句谱（排版照用户断句走）
+ *   2. 用户手动换行且行数正好 = 乐句数 → 尊重用户分行
+ *   3. 连续歌词按【每句实际演唱时长】占比切分（按节奏，不是按音符数）
+ *
+ * 句内字数 > 音符数：多出的字并进【时值最长】的音符（长音拖字/转音）
+ * 字数 ≤ 音符数：一字一音符，其余补 ○（用户可在逐格编辑器里补字）
  *
  * 输出 charMap 是"按音符全局顺序展平的字数组"，可直接喂给
  * buildScore(notes, key, text, { charMap })，保证"哪个字对应哪个音符"精确可查。
  *
- * @param {string} text 用户歌词框里的文本（可含换行）
+ * @param {string} text 用户歌词框里的文本（可含换行和标点）
  * @param {Array<Array>} groups groupPhrases(notes) 的结果，音符含 start/end
  * @returns {{text:string, charMap:Array<string>, perLine:Array<Array<string>>,
- *            phraseCount:number, totalChars:number, noteCount:number}}
+ *            phraseCount:number, totalChars:number, noteCount:number,
+ *            byPunctuation:boolean, userPhrases:number}}
  */
 export function realignLyricsToScore(text, groups, opts = {}) {
   const g = groups || [];
   const noteCount = g.reduce((s, x) => s + x.length, 0);
   if (!noteCount) {
-    return { text: '', charMap: [], perLine: [], phraseCount: 0, totalChars: 0, noteCount: 0 };
+    return { text: '', charMap: [], perLine: [], phraseCount: 0, totalChars: 0, noteCount: 0,
+      byPunctuation: false, userPhrases: 0 };
   }
 
   // 1) 清洗用户输入：按行收集可唱字符，丢掉空行 / 纯占位行
   const raw = String(text || '').replace(/\r\n?/g, '\n').split('\n')
     .map((l) => cleanLyricChars(l))
     .filter((cs) => cs.length && !cs.every((c) => c === '○'));
+
+  // 1.5) 标点分句：用户在歌词里写的逗号/句号/问号/叹号/顿号 = 分句指令
+  const punctSplit = splitByPunctuation(String(text || ''), g.length);
+  const usePunct = punctSplit.length > 1 && punctSplit.length <= g.length + 1;
 
   // 2) 每句的节奏权重 = 该句实际演唱跨度（时长），不是音符个数
   const spans = g.map((line) => {
@@ -387,7 +394,21 @@ export function realignLyricsToScore(text, groups, opts = {}) {
 
   // 3) 字符分配到各句
   let perLineChars;
-  if (raw.length === g.length) {
+  let byPunctuation = false;
+  if (usePunct) {
+    // 标点优先：一个标点一句；若标点句数 ≤ 乐句数，多余的乐句并进最后一句
+    byPunctuation = true;
+    perLineChars = punctSplit.slice(0, g.length);
+    while (perLineChars.length < g.length) {
+      const tail = perLineChars.pop();
+      perLineChars.push(tail, []);
+    }
+    // 若标点句数 > 乐句数：超出的句并进最后一句
+    if (punctSplit.length > g.length) {
+      perLineChars = punctSplit.slice(0, g.length - 1)
+        .concat([punctSplit.slice(g.length - 1).flat()]);
+    }
+  } else if (raw.length === g.length) {
     // 用户手动分的行数正好等于乐句数 → 尊重用户分句
     perLineChars = raw.slice(0, g.length);
   } else {
@@ -417,7 +438,21 @@ export function realignLyricsToScore(text, groups, opts = {}) {
     phraseCount: g.length,
     totalChars: raw.flat().length,
     noteCount,
+    byPunctuation,
+    userPhrases: usePunct ? punctSplit.length : 0,
   };
+}
+
+/** 按用户歌词里的标点切句：返回每句的可唱字符数组。
+ *  「一闪一闪，亮晶晶。」→ [['一','闪','一','闪'], ['亮','晶','晶']]
+ *  没有任何分句标点时返回 []。 */
+function splitByPunctuation(text, maxPhrases) {
+  const PUNCT_RE = /[，。！？、；：,.!?;:…—~～]/;
+  const parts = String(text || '').replace(/\r\n?/g, '\n').split(PUNCT_RE)
+    .map((seg) => cleanLyricChars(seg))
+    .filter((cs) => cs.length && !cs.every((c) => c === '○'));
+  // 只有 1 段 = 没写标点；段数超多也交给 maxPhrases 截断
+  return parts.length > 1 ? parts : [];
 }
 
 /** 句内分配：字数 > 音符 → 多余字并进最长音符；字数 ≤ 音符 → 一字一音符，其余 ○ */

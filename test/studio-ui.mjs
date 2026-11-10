@@ -173,19 +173,18 @@ check('逐格改后输入框数不变', cellEdit.inputs === 7, String(cellEdit.i
 const confirmed2 = await evaluate(`window.__STUDIO.confirmLyrics()`);
 check('确定后逐字对应锁定', /喵/.test(confirmed2.text), confirmed2.text);
 
-console.log('\n── ② 练唱：K歌倒计时 + 逐字高亮（不显示其他） ──');
+console.log('\n── ② 练唱：鸟起伏图 + 大字歌词 + 进句三点提示 ──');
 const kBefore = await evaluate(`document.getElementById('karaoke').classList.contains('hidden')`);
 check('默认不显示卡拉OK', kBefore === true);
-// 用预览钩子（不依赖麦克风）显示倒计时 + 卡拉OK面板
+// 用预览钩子（不依赖麦克风）显示卡拉OK面板
 await evaluate(`window.__STUDIO.previewKaraoke(0.2)`);
 await sleep(120);
 const kState = await evaluate(`(() => {
   const k = document.getElementById('karaoke');
-  const c = document.getElementById('kCount');
-  return { hidden: k.classList.contains('hidden'), count: c.textContent };
+  return { hidden: k.classList.contains('hidden'), birds: document.querySelectorAll('#kBirds .nb-bird').length };
 })()`);
 check('出现卡拉OK面板', kState.hidden === false);
-check('显示 3-2-1 倒计时', /^[321]$/.test(kState.count || ''), kState.count);
+check('练唱视图铺出原唱鸟起伏图（7 只）', kState.birds === 7, String(kState.birds));
 // 直接渲染某一时刻的逐字高亮
 const kHtml = await evaluate(`window.__STUDIO.renderKaraokeAt(0.2)`);
 check('当前句渲染出逐字单元', /k-unit/.test(kHtml), kHtml.slice(0,80));
@@ -198,10 +197,12 @@ check('当前字是大号歌词（歌词是主角）', await evaluate(`(() => {
   if (!c) return false;
   const fs = parseFloat(getComputedStyle(c).fontSize);
   return fs >= 30; })()`));
-// 「什么时候开始唱每一句」：第 2 句起音前的 3-2-1 提词
-const cueHint = await evaluate(`(() => { window.__STUDIO.renderKaraokeAt(1.9);
-  return document.getElementById('kHint').textContent; })()`);
-check('下一句起音前给「第 2 句 · 3-2-1 准备起唱」', /第 2 句/.test(cueHint) && /准备起唱/.test(cueHint), cueHint);
+// 「什么时候开始唱每一句」：句间空档里三个闪烁点倒数，全灭开口
+const cueHint = await evaluate(`(() => { window.__STUDIO.renderKaraokeAt(2.1);
+  return document.getElementById('kHint').innerHTML; })()`);
+check('句间空档给「第 2 句 · 三个闪烁点 · 点灭即开口」', /第 2 句/.test(cueHint) && /k-dot/.test(cueHint) && /点灭即开口/.test(cueHint), cueHint);
+check('进句后提示「唱！」', await evaluate(`(() => { window.__STUDIO.renderKaraokeAt(3.1);
+  return /唱！/.test(document.getElementById('kHint').innerHTML); })()`));
 const kHigh = await evaluate(`(() => {
   const st = window.__STUDIO.getState();
   return st.score.lines[0].units.map(u => ({ char: u.char, jp: u.jianpu.symbol, beat: u.beat }));
@@ -293,7 +294,7 @@ check('花朵身标两个简谱（原唱+你唱）', await evaluate(`(() => {
 const singlePerfect = await evaluate(`(() => { const st = window.__STUDIO.getState(); return st.nbBirds; })()`);
 check('完美清唱总鸟数 = 7（全是单只重合鸟）', singlePerfect === 7, String(singlePerfect));
 check('完美清唱每只鸟都有云彩（气息长度）', await evaluate(`(() => {
-  const cs = [...document.querySelectorAll('.nb-bird .nb-cloud')];
+  const cs = [...document.querySelectorAll('.nb-col .nb-cloud')];
   return cs.length === 7 && cs.every(c => c.getBoundingClientRect().width > 5); })()`));
 // 早/晚唱的清唱：前半句准时、后半句拖 0.35s（局部拖拍，整体对齐抹不平）
 // → 拖拍的字鸟左右错开（dx>0 且不重合），准时的字仍重合；云彩始终在

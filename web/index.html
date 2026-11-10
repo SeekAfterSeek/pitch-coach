@@ -137,9 +137,10 @@
       </div>
     </div>
 
-    <!-- 练唱卡拉OK：3-2-1 倒计时 + 逐字歌词/简谱/节拍高亮（不显示其他） -->
+    <!-- 练唱卡拉OK：进句三点提示 + 逐字歌词高亮 + 原唱鸟起伏图（知道这句旋律怎么飞） -->
     <div class="karaoke hidden" id="karaoke">
       <div class="k-count hidden" id="kCount"></div>
+      <div class="nb-wrap k-birds" id="kBirds"></div>
       <div class="k-line" id="kPrevLine"></div>
       <div class="k-line k-cur" id="kCurLine"></div>
       <div class="k-line" id="kNextLine"></div>
@@ -161,6 +162,7 @@
           <button class="btn small ghost" id="btnAgain">再录一遍</button>
         </div>
       </div>
+      <div class="key-verdict" id="keyVerdict"></div>
       <div class="nb-legend">🐦 每只小鸟是一个音符，<b>飞得越高音越高</b>，鸟身上写着简谱；
         <b>两只鸟碰到一起会开出一朵 🌸 花 = 又准又稳</b>；上下分开=偏高偏低，左右错开=快了慢了；
         鸟后的<b>☁️ 云彩 = 这个音的气息长度</b>（按拍子拉长），你的云比原唱短就是气息短、长了就是拖了；
