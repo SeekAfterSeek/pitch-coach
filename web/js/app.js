@@ -50,6 +50,7 @@ const S = {
   lyricText: '',        // 用户编辑的歌词（按行）
   score: null,          // buildScore 结果（逐字谱）
   charMap: null,        // 按音符全局顺序的逐字歌词（精确钉字）
+  lineBreaks: null,     // 按用户标点的排版行切点（音符全局索引）
   groups: null,         // groupPhrases(parsed.notes) 结果（节奏骨架，重排用）
   lyricsDraft: '',      // 编辑框里的草稿（未确定）
   lyricsConfirmed: false,
@@ -553,16 +554,18 @@ function realignLyrics() {
   const r = realignLyricsToScore(text, S.groups);
   if (!r.charMap.length) { toast('歌词是空的，先填点字', 'err'); return; }
   S.charMap = r.charMap;
+  S.lineBreaks = r.lineBreaks;
   S.lyricsDraft = r.text;
   el.lyricEditor.value = r.text;
-  S.score = buildScore(S.parsed.notes, S.key, r.text, { charMap: S.charMap });
+  // 两步分离：charMap = 字↔音符对应（第一性），lineBreaks = 按用户标点排版（美观）
+  S.score = buildScore(S.parsed.notes, S.key, r.text, { charMap: S.charMap, lineBreaks: S.lineBreaks });
   S.lyricsConfirmed = false;
   renderJianpuSheet();
   renderCellEditor();
   el.scoreInfo.textContent = `${S.key.jianpuKey} · ${S.score.noteCount} 个音 · ${S.score.lines.length} 句`;
-  el.lyricStatus.textContent = `✓ 已按原声节奏重新匹配：${r.totalChars} 字分到 ${r.phraseCount} 句 / ${r.noteCount} 个音符，请逐格核对后点「确定歌词」`;
+  el.lyricStatus.textContent = `✓ 已重新匹配：${r.totalChars} 字 ↔ ${r.noteCount} 个音符一一对应，按你的 ${r.userPhrases} 句标点排版，请逐格核对后点「确定歌词」`;
   el.lyricStatus.className = 'lyric-status ok';
-  toast('已按节奏重新匹配到简谱', 'ok');
+  toast('字音一一对应完成，已按你的标点排版', 'ok');
   return r;
 }
 
@@ -574,10 +577,11 @@ function confirmLyrics() {
   if (!S.charMap || S.charMap.length !== S.parsed.notes.length) {
     const r = realignLyricsToScore(S.lyricText, S.groups);
     S.charMap = r.charMap.length ? r.charMap : scoreCharMap(S.score);
+    S.lineBreaks = r.lineBreaks;
   }
   S.lyricText = charMapToText(S.score, S.charMap);
   S.lyricsConfirmed = true;
-  S.score = buildScore(S.parsed.notes, S.key, S.lyricText, { charMap: S.charMap });
+  S.score = buildScore(S.parsed.notes, S.key, S.lyricText, { charMap: S.charMap, lineBreaks: S.lineBreaks });
   renderJianpuSheet();
   renderCellEditor();
   el.lyricEditor.value = S.lyricText;
@@ -1132,7 +1136,7 @@ async function comparePair() {
   S.lastPractice = { ...r, byLine: groupWordsByLine(r.words), align: r.align };
   S.lastPair = { a, b };
   S.refVocal = va; S.parsed = parsed; S.key = key; S.score = score; S.lyricText = lyricText;
-  S.groups = groups; S.charMap = scoreCharMap(score); S.lyricsConfirmed = false;
+  S.groups = groups; S.charMap = scoreCharMap(score); S.lineBreaks = null; S.lyricsConfirmed = false;
   S.refBlob = await getVocalAudio(a).catch(() => null);
   renderResult();
   S.phase = 'result';
@@ -1197,7 +1201,7 @@ function resetToIdle() {
   stopBirdGlow();
   S.phase = 'idle';
   S.refVocal = null; S.refBlob = null; S.parsed = null; S.key = null; S.score = null; S.lyricText = '';
-  S.charMap = null; S.groups = null;
+  S.charMap = null; S.lineBreaks = null; S.groups = null;
   S.lyricsDraft = ''; S.lyricsConfirmed = false; S.speechText = ''; S.speech = null;
   setStep(1);
   el.heroIcon.textContent = '🎤';

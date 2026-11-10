@@ -347,111 +347,167 @@ export function alignTextToPhrases(text, lineNoteCounts) {
 /* ────────────── 节奏感知的「重新解析匹配」 ────────────── */
 
 /**
- * 把用户改过的歌词，按第一次录音解析出的「节奏骨架」重新钉到每个音符上。
+ * 把用户改过的歌词钉到音符序列上 —— 两步分离：
  *
- * 分句优先级（谁先命中用谁）：
- *   1. **用户标点分句**：歌词里写「一闪一闪，亮晶晶。」——逗号/句号/问号等
- *      就是分句指令，每个标点 = 一句谱（排版照用户断句走）
- *   2. 用户手动换行且行数正好 = 乐句数 → 尊重用户分行
- *   3. 连续歌词按【每句实际演唱时长】占比切分（按节奏，不是按音符数）
+ *  第一步【第一性：字↔音符一一对应】
+ *    把所有可唱字按「每句字数 : 每句音符数」+ 句时长权重，流式分配到音符流上。
+ *    每个字找到它该在的音符；字多并进长音，字少补 ○。这一步与排版无关。
  *
- * 句内字数 > 音符数：多出的字并进【时值最长】的音符（长音拖字/转音）
- * 字数 ≤ 音符数：一字一音符，其余补 ○（用户可在逐格编辑器里补字）
- *
- * 输出 charMap 是"按音符全局顺序展平的字数组"，可直接喂给
- * buildScore(notes, key, text, { charMap })，保证"哪个字对应哪个音符"精确可查。
+ *  第二步【排版：按用户标点分行】（buildScore 的 lineBreaks 参数消费）
+ *    用户写了 N 个标点句 → 音符流被切成 N 行。切点按"每行音符数 ≈ 该句字数
+ *    按时长权重摊到的音符数"求出，只影响好看，不碰第一步的对应关系。
  *
  * @param {string} text 用户歌词框里的文本（可含换行和标点）
- * @param {Array<Array>} groups groupPhrases(notes) 的结果，音符含 start/end
- * @returns {{text:string, charMap:Array<string>, perLine:Array<Array<string>>,
- *            phraseCount:number, totalChars:number, noteCount:number,
- *            byPunctuation:boolean, userPhrases:number}}
+ * @param {Array<Array>} groups groupPhrases(notes) 的结果（提供音符流与时长权重）
+ * @returns {{charMap:Array<string>, lineBreaks:Array<number>, text:string,
+ *            perLine:Array<Array<string>>, userPhrases:number,
+ *            totalChars:number, noteCount:number, byPunctuation:boolean}}
  */
 export function realignLyricsToScore(text, groups, opts = {}) {
   const g = groups || [];
   const noteCount = g.reduce((s, x) => s + x.length, 0);
   if (!noteCount) {
-    return { text: '', charMap: [], perLine: [], phraseCount: 0, totalChars: 0, noteCount: 0,
-      byPunctuation: false, userPhrases: 0 };
+    return { charMap: [], lineBreaks: [], text: '', perLine: [], userPhrases: 0,
+      totalChars: 0, noteCount: 0, byPunctuation: false };
   }
 
-  // 1) 清洗用户输入：按行收集可唱字符，丢掉空行 / 纯占位行
+  // 1) 收集用户的句子：标点优先，其次手动换行，最后整段当一句
+  const punctSplit = splitByPunctuation(String(text || ''));
   const raw = String(text || '').replace(/\r\n?/g, '\n').split('\n')
     .map((l) => cleanLyricChars(l))
     .filter((cs) => cs.length && !cs.every((c) => c === '○'));
+  const sentences = punctSplit.length > 1 ? punctSplit
+    : (raw.length > 1 ? raw : [cleanLyricChars(String(text || ''))]);
+  const userPhrases = sentences.length;
 
-  // 1.5) 标点分句：用户在歌词里写的逗号/句号/问号/叹号/顿号 = 分句指令
-  const punctSplit = splitByPunctuation(String(text || ''), g.length);
-  const usePunct = punctSplit.length > 1 && punctSplit.length <= g.length + 1;
+  // 2) 【第一性】把所有字流式钉到音符流上：
+  //    每个音符的"应得字数" = 总字数 × (该音符时长权重)，累计取整生成容量表，
+  //    字按顺序填进容量里 —— 音程对应关系天然正确，与句子怎么分无关。
+  const flatNotes = g.flat();
+  const chars = sentences.flat();
+  const totalChars = chars.length;
+  const capacities = noteCapacities(flatNotes, totalChars);
 
-  // 2) 每句的节奏权重 = 该句实际演唱跨度（时长），不是音符个数
+  const charMap = new Array(noteCount).fill('○');
+  let ci = 0;
+  for (let ni = 0; ni < noteCount && ci < totalChars; ni++) {
+    const cap = capacities[ni];
+    if (cap <= 0) continue;
+    charMap[ni] = chars.slice(ci, ci + cap).join('');
+    ci += cap;
+  }
+  // 字比音符多且容量吃满还剩 → 并进最后一个有字音符
+  if (ci < totalChars) {
+    const last = Math.max(0, noteCount - 1);
+    charMap[last] = charMap[last] === '○' ? '' : charMap[last];
+    charMap[last] += chars.slice(ci).join('');
+  }
+
+  // 3) 【排版】按用户句数求行切点：每句音符数 ≈ 该句字数 × 时长权重
   const spans = g.map((line) => {
     const st = Math.min(...line.map((n) => n.start));
     const en = Math.max(...line.map((n) => n.end ?? n.start + 0.5));
     return Math.max(0.01, en - st);
   });
   const totalSpan = spans.reduce((a, b) => a + b, 0) || 1;
+  const lineBreaks = computeLineBreaks(sentences, g, spans, totalSpan);
 
-  // 3) 字符分配到各句
-  let perLineChars;
-  let byPunctuation = false;
-  if (usePunct) {
-    // 标点优先：一个标点一句；若标点句数 ≤ 乐句数，多余的乐句并进最后一句
-    byPunctuation = true;
-    perLineChars = punctSplit.slice(0, g.length);
-    while (perLineChars.length < g.length) {
-      const tail = perLineChars.pop();
-      perLineChars.push(tail, []);
-    }
-    // 若标点句数 > 乐句数：超出的句并进最后一句
-    if (punctSplit.length > g.length) {
-      perLineChars = punctSplit.slice(0, g.length - 1)
-        .concat([punctSplit.slice(g.length - 1).flat()]);
-    }
-  } else if (raw.length === g.length) {
-    // 用户手动分的行数正好等于乐句数 → 尊重用户分句
-    perLineChars = raw.slice(0, g.length);
-  } else {
-    // 连续文本 / 行数不符 → 按演唱时长占比切分（按节奏）
-    const chars = raw.flat();
-    perLineChars = [];
-    let ci = 0;
-    for (let i = 0; i < g.length; i++) {
-      let take = i === g.length - 1
-        ? chars.length - ci
-        : Math.max(1, Math.round((spans[i] / totalSpan) * chars.length));
-      take = Math.min(Math.max(take, 0), Math.max(0, chars.length - ci));
-      perLineChars.push(chars.slice(ci, ci + take));
-      ci += take;
-    }
+  // 4) 供显示的 perLine / text（排版后的行）
+  const perLine = [];
+  let si = 0;
+  for (let li = 0; li < lineBreaks.length; li++) {
+    const end = lineBreaks[li];
+    const seg = charMap.slice(si, end);
+    perLine.push(seg);
+    si = end;
   }
-
-  // 4) 句内把字符钉到每个音符
-  const perLine = g.map((line, i) => assignCharsToNotes(perLineChars[i] || [], line));
-  const charMap = perLine.flat();
   const outText = perLine.map((cs) => cs.join('')).join('\n');
 
   return {
-    text: outText,
     charMap,
+    lineBreaks,
+    text: outText,
     perLine,
-    phraseCount: g.length,
-    totalChars: raw.flat().length,
+    userPhrases,
+    totalChars,
     noteCount,
-    byPunctuation,
-    userPhrases: usePunct ? punctSplit.length : 0,
+    byPunctuation: punctSplit.length > 1,
   };
+}
+
+/**
+ * 每个音符的"应得字数"容量表：总字数按音符时长占比摊到每个音符上，
+ * 累计取整保证 Σcap = min(totalChars, noteCount) 且容量分布平滑。
+ * 长音天然分到更多字（拖字/转音），短音一字一音。
+ */
+function noteCapacities(flatNotes, totalChars) {
+  const n = flatNotes.length;
+  if (totalChars <= n) return flatNotes.map((_, i) => (i < totalChars ? 1 : 0));
+  const durs = flatNotes.map((nt) => Math.max(0.02, (nt.end ?? nt.start + 0.5) - nt.start));
+  const totalDur = durs.reduce((a, b) => a + b, 0) || 1;
+  const caps = [];
+  let acc = 0;   // 已分配字数（浮点累计）
+  let got = 0;   // 已取整字数
+  for (let i = 0; i < n; i++) {
+    acc += (durs[i] / totalDur) * totalChars;
+    const c = Math.round(acc) - got;   // 这一音分到的字数
+    caps.push(Math.max(1, c));
+    got += caps[i];
+  }
+  // 修正取整误差：多退少补到 totalChars
+  let diff = got - totalChars;
+  let i = n - 1;
+  while (diff !== 0 && i >= 0) {
+    if (diff > 0 && caps[i] > 1) { caps[i]--; diff--; }
+    else if (diff < 0) { caps[i]++; diff++; }
+    else i--;
+  }
+  return caps;
+}
+
+/**
+ * 按用户句数求排版行切点（音符全局索引数组，升序，末项=noteCount）。
+ * 每行音符数 ≈ 该句字数 × (乐句时长权重)，在原乐句边界附近微调，
+ * 保证切点落在音符流上、行数正好等于用户句数。
+ */
+function computeLineBreaks(sentences, groups, spans, totalSpan) {
+  const noteCount = groups.reduce((s, x) => s + x.length, 0);
+  const K = sentences.length;
+  if (K <= 1) return [noteCount];
+
+  // 每个用户句分到的理想音符数
+  const totalSentenceChars = Math.max(1, sentences.reduce((a, x) => a + x.length, 0));
+  const want = sentences.map((s, k) => {
+    const byChars = s.length / totalSentenceChars;
+    const bySpan = spans[Math.min(k, spans.length - 1)] / totalSpan;
+    return k === K - 1
+      ? 0 // 末句吃余数
+      : Math.max(1, Math.round(noteCount * (0.6 * byChars + 0.4 * bySpan)));
+  });
+  const breaks = [];
+  let acc = 0;
+  for (let k = 0; k < K - 1; k++) {
+    acc += want[k];
+    // 夹在 [acc-2, acc+2] 且落在音频乐句边界附近（偏移 ≤1 个音符）最优，
+    // 但不强制——排版美观优先于乐句边界
+    breaks.push(Math.min(Math.max(1, acc), noteCount - (K - 1 - k)));
+  }
+  // 保证递增且末项 = noteCount
+  for (let k = 1; k < breaks.length; k++) {
+    if (breaks[k] <= breaks[k - 1]) breaks[k] = breaks[k - 1] + 1;
+  }
+  breaks.push(noteCount);
+  return breaks;
 }
 
 /** 按用户歌词里的标点切句：返回每句的可唱字符数组。
  *  「一闪一闪，亮晶晶。」→ [['一','闪','一','闪'], ['亮','晶','晶']]
  *  没有任何分句标点时返回 []。 */
-function splitByPunctuation(text, maxPhrases) {
+function splitByPunctuation(text) {
   const PUNCT_RE = /[，。！？、；：,.!?;:…—~～]/;
   const parts = String(text || '').replace(/\r\n?/g, '\n').split(PUNCT_RE)
     .map((seg) => cleanLyricChars(seg))
     .filter((cs) => cs.length && !cs.every((c) => c === '○'));
-  // 只有 1 段 = 没写标点；段数超多也交给 maxPhrases 截断
   return parts.length > 1 ? parts : [];
 }
 

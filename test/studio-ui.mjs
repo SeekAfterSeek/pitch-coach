@@ -153,17 +153,19 @@ const canPlay = await evaluate(`(() => { window.__STUDIO.simulateRefBlob(); cons
 check('有原声音频时播放按钮可用', canPlay.blob === true && canPlay.disabled === false, JSON.stringify(canPlay));
 
 console.log('\n── 改歌词 → 重新解析匹配 → 逐格改 → 确定 ──');
-// 用户把歌词改成另一段（连续文本，长度不同），点「重新解析匹配」
+// 用户把歌词改成另一段（带标点断句），点「重新解析匹配」：
+// 对应第一性（7字↔7音符），排版按用户标点（2句）
 const realign = await evaluate(`(() => {
-  window.__STUDIO.setLyrics('两只老虎跑得快');
+  window.__STUDIO.setLyrics('两只老虎，跑得快');
   const r = window.__STUDIO.realignLyrics();
   const st = window.__STUDIO.getState();
   return { r, charMap: st.charMap, editor: st.lyricEditorValue, status: st.lyricStatus };
 })()`);
 check('重排后 charMap 长度 = 7 个音符', realign.charMap?.length === 7, JSON.stringify(realign.charMap));
-check('重排后歌词换成「两只老虎跑得快」', /两只老虎/.test(realign.editor), realign.editor);
-check('重排状态提示按节奏匹配', /按原声节奏重新匹配/.test(realign.status), realign.status);
-check('重排结果按句分行', realign.r?.phraseCount === 2, JSON.stringify(realign.r));
+check('重排后歌词换成「两只老虎，跑得快」', /两只老虎/.test(realign.editor), realign.editor);
+check('重排状态提示一一对应+按标点排版', /一一对应.*按你的.*句标点排版/.test(realign.status), realign.status);
+check('排版行数 = 用户标点句数 2', realign.r?.perLine?.length === 2, JSON.stringify(realign.r?.perLine));
+check('对应不被排版破坏：charMap 按顺序含全部 7 字', realign.charMap.join('') === '两只老虎跑得快', JSON.stringify(realign.charMap));
 // 逐格改：把第 0 个音符上的字改成「喵」
 const cellEdit = await evaluate(`(() => { const c = window.__STUDIO.setCellChar(0, '喵'); const st = window.__STUDIO.getState();
   return { c, map0: st.charMap[0], editor: st.lyricEditorValue, inputs: st.jceInputs }; })()`);
@@ -197,8 +199,8 @@ check('当前字是大号歌词（歌词是主角）', await evaluate(`(() => {
   if (!c) return false;
   const fs = parseFloat(getComputedStyle(c).fontSize);
   return fs >= 30; })()`));
-// 「什么时候开始唱每一句」：句间空档里三个闪烁点倒数，全灭开口
-const cueHint = await evaluate(`(() => { window.__STUDIO.renderKaraokeAt(2.1);
+// 「什么时候开始唱每一句」：第 1 句结束(2s)后的空档里三个闪烁点倒数，全灭开口
+const cueHint = await evaluate(`(() => { window.__STUDIO.renderKaraokeAt(2.6);
   return document.getElementById('kHint').innerHTML; })()`);
 check('句间空档给「第 2 句 · 三个闪烁点 · 点灭即开口」', /第 2 句/.test(cueHint) && /k-dot/.test(cueHint) && /点灭即开口/.test(cueHint), cueHint);
 check('进句后提示「唱！」', await evaluate(`(() => { window.__STUDIO.renderKaraokeAt(3.1);

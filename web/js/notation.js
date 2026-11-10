@@ -226,16 +226,32 @@ export function buildScore(notes, key, lyricText, opts = {}) {
 
   // 给每个音符标上全局序号，切句后仍能取回它对应的简谱符号
   const indexed = notes.map((n, gi) => ({ ...n, _gi: gi }));
-  const groups = groupPhrases(indexed, {
-    gapSec: opts.gapSec ?? 0.42,
-    maxPerLine: opts.maxPerLine ?? 8,
-  });
   const inputLines = String(lyricText || '').split(/\r?\n/);
   // charMap：按【音符全局顺序】给出的逐字歌词（realignLyricsToScore 的产物）。
   // 传了它就以它为准 —— 这样"哪个字对应哪个音符"是精确钉死的，
   // 而不是靠文本换行重新猜一遍。
   const charMap = Array.isArray(opts.charMap) && opts.charMap.length >= notes.length
     ? opts.charMap : null;
+  // lineBreaks：按【音符全局索引】的排版行切点（升序，末项=notes.length）。
+  // 这是"美观点"——用户按标点断句，谱子就按他的断句排版；
+  // 优先级高于音频空档切句，且不碰 charMap 的对应关系。
+  const lineBreaks = Array.isArray(opts.lineBreaks) && opts.lineBreaks.length &&
+    opts.lineBreaks[opts.lineBreaks.length - 1] === notes.length ? opts.lineBreaks : null;
+
+  // 组行：优先用 lineBreaks（用户排版），否则退回音频空档切句
+  const groups = [];
+  if (lineBreaks) {
+    let s = 0;
+    for (const end of lineBreaks) {
+      groups.push(indexed.slice(s, end));
+      s = end;
+    }
+  } else {
+    groups.push(...groupPhrases(indexed, {
+      gapSec: opts.gapSec ?? 0.42,
+      maxPerLine: opts.maxPerLine ?? 8,
+    }));
+  }
 
   const lines = groups.map((group, li) => {
     let assigned;
