@@ -134,7 +134,8 @@ export function scorePracticeWords(units, key, takeFrames, opts = {}) {
       return {
         ...u, refNum, myNum: '—', status: 'missed',
         pitch: '没唱到', timing: '—', band: 'missed',
-        dev: null, userMidi: null, timingMs: null,
+        dev: null, userMidi: null, timingMs: null, userDurMs: 0,
+        refDurMs: Math.max(1, (u.end - u.start) * 1000),
         text: '没唱到',
       };
     }
@@ -146,6 +147,15 @@ export function scorePracticeWords(units, key, takeFrames, opts = {}) {
     const dev = (userMidi - u.midi) * 100;
     const onset = seg[0].t;
     const timingMs = (onset - u.start) * 1000;
+
+    // 你这个音实际唱了多久：从起音开始，连续有声（间隔 ≤0.15s）就算同一音，
+    // 断气/换气就截断——长音气息短一截会如实反映。
+    let lastT = seg[0].t;
+    for (let k = 1; k < seg.length; k++) {
+      if (seg[k].t - lastT > 0.15) break;
+      lastT = seg[k].t;
+    }
+    const userDurMs = Math.max(0, (lastT - onset) * 1000);
 
     const abs = Math.abs(dev);
     let pitch;
@@ -163,7 +173,8 @@ export function scorePracticeWords(units, key, takeFrames, opts = {}) {
       ...u,
       refNum, myNum: mySym,
       status: 'sung', pitch, timing, band,
-      dev, userMidi, timingMs,
+      dev, userMidi, timingMs, userDurMs,
+      refDurMs: Math.max(1, (u.end - u.start) * 1000),
       text: practiceWordText({ status: 'sung', pitch, timing }, tol),
     };
   });

@@ -238,6 +238,30 @@ check('字上标出「偏高」', /偏高/.test(tagText), tagText);
 const pairNums = await evaluate(`(() => { const c=document.querySelector('.lr-cell'); return { ref:c.querySelector('.lr-ref').textContent, my:c.querySelector('.lr-my').textContent }; })()`);
 check('上排原唱简谱 ≠ 下排我唱简谱', pairNums.ref !== pairNums.my, JSON.stringify(pairNums));
 
+console.log('\n── 小鸟音符对照图：飞得越高音越高，重合=准，点鸟听音，播放亮列 ──');
+// （当前 DOM 是偏高清唱的结果：+100¢ 超出 ±50¢ 容差 → 全部不重合）
+const nb = await evaluate(`(() => { const st = window.__STUDIO.getState();
+  return { cols: st.nbCols, birds: st.nbBirds, tops: st.nbColTops }; })()`);
+check('小鸟图有 7 列', nb.cols === 7, String(nb.cols));
+check('偏高清唱是两只分开的鸟（14 只）', nb.birds === 14, String(nb.birds));
+check('每列都有判定框色', nb.tops.every((t) => t.band !== ''), JSON.stringify(nb.tops.map(t=>t.band)));
+check('偏高清唱不出现重合鸟（merged=0）', await evaluate(`document.querySelectorAll('.nb-bird.merged').length === 0`));
+// 偏高清唱（+100¢ = 1 半音 ≈ +9% 高度）→ 你的鸟应明显飞得比原唱鸟高（my top < ref top）
+const hi = await evaluate(`(() => { const st = window.__STUDIO.getState();
+  const tops = st.nbColTops;
+  return { refLow: tops[0].ref, myLow: tops[0].my, refHigh: tops[Math.max(...st.score.lines[1].units.map(u=>u.noteIdx))].ref }; })()`);
+check('高音鸟飞得比低音鸟高（top 更小）', hi.refHigh < hi.refLow, JSON.stringify(hi));
+check('偏高时你的鸟比原唱鸟飞得高（my < ref）', hi.myLow < hi.refLow - 4, JSON.stringify(hi));
+// 点鸟试听（无麦克风引擎时安全返回）
+const aud = await evaluate(`(() => { const st = window.__STUDIO.getState(); return st.auditionBird(0); })()`);
+check('点鸟试听返回音高信息', aud.midi > 0, JSON.stringify(aud));
+// 播放联动高亮：glowBirdAt(0.2) 应点亮第 0 列
+const glow = await evaluate(`(() => { window.__STUDIO.glowBirdAt(0.2);
+  return document.querySelectorAll('.nb-col.on').length; })()`);
+check('播放到 0.2s 亮起当前列', glow === 1, String(glow));
+await evaluate(`window.__STUDIO.glowBirdAt(99)`); // 越界不崩
+check('越界时刻不崩、无亮列', await evaluate(`document.querySelectorAll('.nb-col.on').length === 0`));
+
 console.log('\n── 自动时间对齐：整体晚开口不再"全没唱到" ──');
 // 整段晚 0.8s 的完美清唱
 const DELAYED = N([[60,0.8,1.3],[62,1.3,1.8],[64,1.8,2.3],[65,2.3,2.8],[67,3.8,4.3],[69,4.3,4.8],[71,4.8,5.3]]);
@@ -248,29 +272,30 @@ check('对齐后唱到 ≥6 字（不是全漏）', sd.practiceSummary.sung >= 6
 check('对齐后漏唱 ≤1', sd.practiceSummary.missed <= 1, String(sd.practiceSummary.missed));
 check('结果标注已自动对齐', sd.practiceAlign?.aligned === true, JSON.stringify(sd.practiceAlign));
 
-console.log('\n── 小鸟音符对照图：飞得越高音越高，点鸟听音，播放亮列 ──');
-const nb = await evaluate(`(() => { const st = window.__STUDIO.getState();
-  return { cols: st.nbCols, birds: st.nbBirds, tops: st.nbColTops }; })()`);
-check('小鸟图有 7 列', nb.cols === 7, String(nb.cols));
-check('每列两只鸟（原唱+你唱）', nb.birds === 14, String(nb.birds));
-check('每列都有判定框色', nb.tops.every((t) => t.band !== ''), JSON.stringify(nb.tops.map(t=>t.band)));
-// 偏高清唱：你唱的鸟应整体位置更高（top% 更小）或同级——至少第 1 列原唱歌更高（my top < ref top 因偏高？）
-// 偏高 = 唱得比原唱高 → my 鸟 top 应 ≤ ref 鸟 top（越高越靠上）
-check('偏高列你唱鸟位置不低于原唱鸟', nb.tops.some((t) => t.my <= t.ref + 2), JSON.stringify(nb.tops));
-// 高音音符（第2句的 5 6 7，midi 67/69/71）小鸟应比低音（60/62/64）飞得高（top 更小）
-const hi = await evaluate(`(() => { const st = window.__STUDIO.getState();
-  const w = st.score.lines[1].units.map(u=>u.noteIdx); const tops = st.nbColTops;
-  return { refLow: tops[0].ref, refHigh: tops[Math.max(...w)].ref }; })()`);
-check('高音鸟飞得比低音鸟高（top 更小）', hi.refHigh < hi.refLow, JSON.stringify(hi));
-// 点鸟试听（无麦克风引擎时安全返回）
-const aud = await evaluate(`(() => { const st = window.__STUDIO.getState(); return st.auditionBird(0); })()`);
-check('点鸟试听返回音高信息', aud.midi > 0, JSON.stringify(aud));
-// 播放联动高亮：glowBirdAt(0.2) 应点亮第 0 列
-const glow = await evaluate(`(() => { window.__STUDIO.glowBirdAt(0.2);
-  return document.querySelectorAll('.nb-col.on').length; })()`);
-check('播放到 0.2s 亮起当前列', glow === 1, String(glow));
-await evaluate(`window.__STUDIO.glowBirdAt(99)`); // 越界不崩
-check('越界时刻不崩、无亮列', await evaluate(`document.querySelectorAll('.nb-col.on').length === 0`));
+console.log('\n── 完美清唱：两鸟相碰开花 🌸（重合=又准又稳）──');
+// 完美清唱（与参考完全一致）→ 每列都该合并成 1 只鸟（音准+节奏都在容差内）
+await evaluate(`window.__STUDIO.commitPracticeFrames(${PERFECT})`);
+await sleep(300);
+const mergedPerfect = await evaluate(`document.querySelectorAll('.nb-bird.merged').length`);
+check('完美清唱 7 列全部开花（merged=7）', mergedPerfect === 7, String(mergedPerfect));
+check('花朵身标两个简谱（原唱+你唱）', await evaluate(`(() => {
+  const b = document.querySelector('.nb-bird.merged');
+  return b.textContent.includes('🌸') && b.querySelectorAll('.nb-jp').length === 2; })()`));
+const singlePerfect = await evaluate(`(() => { const st = window.__STUDIO.getState(); return st.nbBirds; })()`);
+check('完美清唱总鸟数 = 7（全是单只重合鸟）', singlePerfect === 7, String(singlePerfect));
+check('完美清唱每只鸟都有云彩（气息长度）', await evaluate(`(() => {
+  const cs = [...document.querySelectorAll('.nb-bird .nb-cloud')];
+  return cs.length === 7 && cs.every(c => c.getBoundingClientRect().width > 5); })()`));
+// 早/晚唱的清唱：前半句准时、后半句拖 0.35s（局部拖拍，整体对齐抹不平）
+// → 拖拍的字鸟左右错开（dx>0 且不重合），准时的字仍重合；云彩始终在
+const DRAG = N([[60,0,0.5],[62,0.5,1],[64,1,1.5],[65,1.5,2],[67,3.35,3.85],[69,3.85,4.35],[71,4.35,4.85]]);
+await evaluate(`window.__STUDIO.commitPracticeFrames(${DRAG})`);
+await sleep(300);
+const nbD = await evaluate(`(() => { const st = window.__STUDIO.getState();
+  return { tops: st.nbColTops, merged: document.querySelectorAll('.nb-bird.merged').length }; })()`);
+check('局部拖拍 → 部分列没开花（0 < merged < 7）', nbD.merged > 0 && nbD.merged < 7,
+  JSON.stringify({ merged: nbD.merged, dx: nbD.tops.map(t=>t.dx) }));
+check('拖拍字的鸟往右错开（dx > 0）', nbD.tops.some((t) => t.dx > 5), JSON.stringify(nbD.tops.map(t=>t.dx)));
 
 console.log('\n── 历史任意两段互比 ──');
 const idA = await evaluate(`window.__STUDIO.importFrames(${REF}, '导入A')`);

@@ -318,10 +318,29 @@ body {
   display: inline-flex; flex-direction: column; align-items: center; gap: 0;
   transition: top .25s ease, box-shadow .15s; white-space: nowrap;
 }
-.nb-bird.ref { left: 10%; color: var(--cyan); text-shadow: 0 0 10px rgba(63,208,224,.25); }
-.nb-bird.my  { left: 58%; color: var(--lime); }
+.nb-bird.ref { left: 50%; transform: translateX(-50%); color: var(--cyan); text-shadow: 0 0 10px rgba(63,208,224,.25); }
+.nb-bird.my  { left: 50%; transform: translateX(-50%); color: var(--lime); }
+/* 两鸟重合 = 唱准：合成一朵花（简谱上原唱/下你唱），绿框 */
+.nb-bird.merged {
+  left: 50%; transform: translateX(-50%); color: var(--lime);
+  font-size: 22px;
+  box-shadow: 0 0 0 2px rgba(37,224,138,.65);
+  background: rgba(37,224,138,.12);
+  padding: 4px 8px; gap: 1px;
+}
+.nb-bird.merged .nb-jp.my { color: #fff; background: rgba(37,224,138,.55); }
+.nb-bird.merged.perfect { box-shadow: 0 0 0 2px rgba(37,224,138,.65); }
+.nb-bird.merged.ok { box-shadow: 0 0 0 2px rgba(255,209,102,.6); }
+/* 没唱到：半透明灰鸟位 */
+.nb-bird.my.missed { opacity: .45; filter: grayscale(.8); }
 .nb-jp { font: 700 11px/1.2 "PingFang SC", monospace; color: #fff; background: rgba(0,0,0,.4);
   border-radius: 5px; padding: 0 4px; margin-top: -2px; }
+/* 云彩 = 这个音的气息长度：贴在鸟身后，长度即时长 */
+.nb-cloud { display: inline-block; height: 10px; margin-left: 2px; border-radius: 999px;
+  vertical-align: middle; }
+.nb-bird.ref .nb-cloud { background: linear-gradient(90deg, rgba(63,208,224,.5), rgba(63,208,224,.08)); }
+.nb-bird.my  .nb-cloud { background: linear-gradient(90deg, rgba(125,220,90,.5), rgba(125,220,90,.08)); }
+.nb-bird.merged .nb-cloud { background: linear-gradient(90deg, rgba(37,224,138,.5), rgba(37,224,138,.08)); }
 .nb-bird.ref .nb-jp { color: var(--cyan); }
 .nb-bird.my .nb-jp { color: var(--lime); }
 /* 判定框色：只描你的那只鸟 */
@@ -329,7 +348,9 @@ body {
 .nb-bird.my.ok { box-shadow: 0 0 0 1.5px rgba(255,209,102,.55); }
 .nb-bird.my.sharp { box-shadow: 0 0 0 1.5px rgba(255,159,67,.65); }
 .nb-bird.my.off { box-shadow: 0 0 0 1.5px rgba(255,77,94,.7); }
-.nb-col.on .nb-bird { filter: drop-shadow(0 0 8px rgba(37,224,138,.8)); transform: translateY(-50%) scale(1.15); }
+.nb-col.on .nb-bird { filter: drop-shadow(0 0 8px rgba(37,224,138,.8)); }
+.nb-col.on .nb-bird.ref { transform: translateX(-50%) scale(1.15); }
+.nb-col.on .nb-bird.my { transform: translateX(-50%) scale(1.15); }
 .nb-col.missed .nb-bird.my { opacity: .35; filter: grayscale(.6); }
 .nb-ch {
   position: absolute; left: 0; right: 0; bottom: 2px; text-align: center;

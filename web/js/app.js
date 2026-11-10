@@ -710,6 +710,13 @@ function birdTopPct(midi) {
   return clamp((1 - p) * 88 + 6, 6, 94);              // 6%..94%，越高音越靠上
 }
 
+/** 你唱的鸟的位置 = 原唱鸟位置 + 偏差放大：±1 半音 ≈ ±9% 高度（半个音程间隔），
+ *  "差半音"视觉上正好差一档，重合=准、偏高=飞得比原唱歌高、偏低=低，一眼可读。 */
+function myBirdTopPct(refMidi, userMidi) {
+  const devSemi = clamp((userMidi - refMidi) * 9, -22, 22);   // 半音→%，封顶 ±22%
+  return clamp(birdTopPct(refMidi) - devSemi, 4, 96);
+}
+
 function stopBirdGlow() {
   if (S.nbPlayingIdx == null) return;
   el.noteBlocks.querySelectorAll('.nb-col.on').forEach((n) => n.classList.remove('on'));
@@ -747,19 +754,46 @@ function renderNoteBirds() {
   if (!words.length) { el.noteBlocks.innerHTML = ''; return; }
 
   const cellW = 64;
+  const tol = S.tol ?? 50;
+  const pxPerSec = 26;   // 云彩长度比例尺：1 拍 ≈ 26px（按 beatSec 折算）
+  const beatSec = S.score?.beatSec || 0.5;
+  const durPx = (ms) => clamp(Math.round((ms / 1000) / beatSec * pxPerSec), 6, 140);
   el.noteBlocks.innerHTML = words.map((w, i) => {
     const refTop = birdTopPct(w.midi);
     const band = w.band || 'perfect';
     const sung = w.status === 'sung';
-    const myTop = sung ? birdTopPct(w.userMidi ?? w.midi) : refTop;
+    const devC = sung && w.userMidi != null ? (w.userMidi - w.midi) * 100 : null;
+    const timingMs = sung ? (w.timingMs ?? 0) : null;
+    // 严丝合缝 = 音准 ±tol 内 且 节奏 ±90ms 内：两鸟完全覆盖成一只
+    const merged = sung && devC != null && Math.abs(devC) <= tol && Math.abs(timingMs) <= 90;
+    const myTop = sung ? myBirdTopPct(w.midi, w.userMidi ?? w.midi) : refTop;
+    // 左右偏差 = 节奏：唱早了鸟在左、唱晚了鸟在右，缝隙即快/慢多少
+    const dx = sung ? clamp((timingMs || 0) * 0.12, -26, 26) : 0;
+    // 云彩 = 这个音唱了多长（气息）：原唱云 vs 你唱的云，一样长才严丝合缝
+    const refCloud = durPx(w.refDurMs ?? (u2ms(w)));
+    const myCloud = sung ? durPx(w.userDurMs ?? 0) : 0;
+    const durDiff = sung ? Math.round(((w.userDurMs ?? 0) - (w.refDurMs ?? 0)) / 100) * 0.1 : null;
+    const durTag = sung && durDiff != null && Math.abs(durDiff) >= 0.2
+      ? (durDiff > 0 ? ` 长${durDiff.toFixed(1)}s` : ` 短${Math.abs(durDiff).toFixed(1)}s`) : '';
     const devTxt = sung && w.dev != null ? `${w.dev > 0 ? '+' : ''}${Math.round(w.dev)}¢` : (sung ? '' : '没唱到');
+    const timTxt = sung && timingMs != null && Math.abs(timingMs) > 90
+      ? (timingMs < 0 ? ' 快' : ' 慢') : '';
+    const cloud = (cls, wpx) => `<span class="nb-cloud ${cls}" style="width:${wpx}px"></span>`;
+    const bird = merged
+      ? `<div class="nb-bird merged ${band}" style="top:${refTop}%" title="两只鸟碰在一起开出了花 = 又准又稳（差 ${Math.round(devC)}¢）">
+           🌸<b class="nb-jp">${escapeHtml(w.refNum)}</b><b class="nb-jp my">${escapeHtml(w.myNum || '—')}</b>${cloud('', refCloud)}</div>`
+      : `<div class="nb-bird ref" style="top:${refTop}%">🐦<b class="nb-jp">${escapeHtml(w.refNum)}</b>${cloud('ref', refCloud)}</div>` +
+        (sung
+          ? `<div class="nb-bird my ${band}" style="top:${myTop}%;left:calc(50% + ${dx.toFixed(1)}px)" title="上下=音高偏差 左右=快慢 云=气息长短">🐦<b class="nb-jp">${escapeHtml(w.myNum || '—')}</b>${cloud('my', Math.max(myCloud, 8))}</div>`
+          : `<div class="nb-bird my missed" style="top:${refTop}%" title="没唱到">🫥</div>`);
     return `<div class="nb-col ${sung ? '' : 'missed'}" data-idx="${i}" data-start="${w.start}" data-end="${w.end}"
-        title="第 ${i + 1} 音 · 原唱 ${escapeHtml(w.refNum)} · 你 ${sung ? escapeHtml(w.myNum || '—') : '没唱到'} · ${escapeHtml(w.pitch || '')}${devTxt ? ' ' + devTxt : ''} · 点此听音">
-      <div class="nb-bird ref" style="top:${refTop}%">🐦<b class="nb-jp">${escapeHtml(w.refNum)}</b></div>
-      <div class="nb-bird my ${band}" style="top:${myTop}%">🐦<b class="nb-jp">${sung ? escapeHtml(w.myNum || '—') : '—'}</b></div>
+        title="第 ${i + 1} 音 · 原唱 ${escapeHtml(w.refNum)} · 你 ${sung ? escapeHtml(w.myNum || '—') : '没唱到'} · ${escapeHtml(w.pitch || '')}${devTxt ? ' ' + devTxt : ''}${timTxt}${durTag ? ' · 气息' + durTag : ''} · 点此听音">
+      ${bird}
       <div class="nb-ch">${escapeHtml(w.char || '○')}</div>
     </div>`;
   }).join('');
+
+  function u2ms(w) { return Math.max(1, (w.end - w.start) * 1000); }
 
   el.noteBlocks.style.setProperty('--nb-cell-w', cellW + 'px');
   // 点列 = 反复试听那一个音
@@ -1115,11 +1149,17 @@ function installTestHooks() {
         lrLines: el.lyricResult.querySelectorAll('.lr-line').length,
         nbCols: el.noteBlocks.querySelectorAll('.nb-col').length,
         nbBirds: el.noteBlocks.querySelectorAll('.nb-bird').length,
-        nbColTops: [...el.noteBlocks.querySelectorAll('.nb-col')].map((c) => ({
-          ref: Number(c.querySelector('.nb-bird.ref')?.style.top.replace('%', '') || 0),
-          my: Number(c.querySelector('.nb-bird.my')?.style.top.replace('%', '') || 0),
-          band: c.querySelector('.nb-bird.my')?.className.replace('nb-bird my', '').trim() || '',
-        })),
+        nbColTops: [...el.noteBlocks.querySelectorAll('.nb-col')].map((c) => {
+          const myEl = c.querySelector('.nb-bird.my');
+          const bandClass = myEl ? [...myEl.classList].find((x) => ['perfect','ok','sharp','off','missed'].includes(x)) : '';
+          const leftPx = myEl ? (myEl.style.left.match(/calc\(50% \+ (-?[\d.]+)px\)/)?.[1] ?? null) : null;
+          return {
+            ref: Number(c.querySelector('.nb-bird.ref')?.style.top.replace('%', '') || 0),
+            my: Number(myEl?.style.top.replace('%', '') || 0),
+            band: bandClass || '',
+            dx: leftPx != null ? Number(leftPx) : 0,
+          };
+        }),
         // 单音试听 / 播放联动
         auditionBird(i) {
           auditionBird(i);
