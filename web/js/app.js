@@ -251,7 +251,8 @@ function loop() {
   S.recRAF = requestAnimationFrame(loop);
 }
 
-/** 练唱中：逐字高亮当前句，显示每字的简谱与节拍 */
+/** 练唱中：逐字高亮当前句，显示每字的简谱与节拍。
+ *  歌词是主角：当前字大号白字放中间最亮，音符退居其上作小字提示。 */
 function updateKaraoke(vt) {
   const score = S.score;
   if (!score?.lines?.length) return;
@@ -270,9 +271,9 @@ function updateKaraoke(vt) {
     if (!line) return '';
     return line.units.map((u) => {
       const on = active && vt >= u.start && vt < u.end;
-      return `<span class="k-unit${on ? ' on' : ''}${vt > u.end ? ' done' : ''}" title="${escapeHtml(jianpuTitle(u.jianpu))}">
-        <span class="k-jp">${jianpuHtml(u.jianpu)}</span>
-        <span class="k-beat">${escapeHtml(u.beat)}</span>
+      const done = active && vt > u.end;
+      return `<span class="k-unit${on ? ' on' : ''}${done ? ' done' : ''}" title="${escapeHtml(jianpuTitle(u.jianpu))}">
+        <span class="k-jp">${jianpuHtml(u.jianpu)}<i class="k-beat">${escapeHtml(u.beat)}</i></span>
         <span class="k-char">${escapeHtml(u.char || '○')}</span>
       </span>`;
     }).join('');

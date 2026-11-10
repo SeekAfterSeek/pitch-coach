@@ -239,26 +239,31 @@ body {
   font: 700 15px/1.4 "PingFang SC", monospace; }
 .jce-input:focus { outline: none; border-color: var(--green); background: #10201a; }
 
-/* ── 练唱卡拉OK ── */
-.karaoke { margin-top: 16px; padding: 22px 18px; border-radius: 14px; text-align: center; position: relative;
+/* ── 练唱卡拉OK：歌词是主角 ── */
+.karaoke { margin-top: 16px; padding: 26px 18px; border-radius: 14px; text-align: center; position: relative;
   border: 1px solid var(--line-strong); background: radial-gradient(600px 300px at 50% 0%, rgba(140,120,255,.10), transparent 70%), #0a1119; }
 .k-count { position: absolute; font-size: 96px; font-weight: 800; color: var(--green);
   text-shadow: 0 0 40px rgba(37,224,138,.5); animation: kpop .9s ease; }
 @keyframes kpop { from { transform: scale(1.6); opacity: 0; } 40% { opacity: 1; } to { transform: scale(1); opacity: .9; } }
-.k-line { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px; min-height: 30px; }
-.k-line#kPrevLine, .k-line#kNextLine { opacity: .35; filter: blur(.3px); }
-.k-unit { display: inline-flex; flex-direction: column; align-items: center; min-width: 42px; padding: 4px 6px; border-radius: 8px;
+.k-line { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; min-height: 46px; }
+.k-line#kPrevLine, .k-line#kNextLine { opacity: .28; filter: blur(.4px); }
+.k-unit { display: inline-flex; flex-direction: column-reverse; align-items: center; min-width: 52px; padding: 5px 8px 3px; border-radius: 10px;
   transition: transform .12s, background .12s; }
-.k-jp { font: 700 15px/1.1 "PingFang SC", monospace; color: var(--cyan); }
-.k-beat { font-size: 9px; color: var(--text-3); }
-.k-char { font: 700 21px/1.3 "PingFang SC", monospace; color: var(--text-2); }
-.k-unit.on { background: rgba(37,224,138,.16); transform: scale(1.18); box-shadow: 0 0 0 1px rgba(37,224,138,.45); }
-.k-unit.on .k-char { color: var(--green); }
-.k-unit.on .k-jp { color: #fff; }
-.k-unit.done { opacity: .5; }
+/* 音符小字垫在上面作提示，歌词大字在下面当主角 */
+.k-jp { font: 700 13px/1.1 "PingFang SC", monospace; color: var(--text-3); display: inline-flex; align-items: baseline; gap: 2px; }
+.k-beat { font-size: 8px; font-style: normal; color: var(--text-3); opacity: .8; }
+/* 歌词：未唱到的也足够亮；当前字白底大字最突出 */
+.k-char { font: 800 30px/1.25 "PingFang SC", "Microsoft YaHei", monospace; color: #f2f7ff;
+  text-shadow: 0 2px 10px rgba(0,0,0,.6); letter-spacing: 2px; }
+.k-unit.on { background: linear-gradient(180deg, rgba(37,224,138,.22), rgba(37,224,138,.08));
+  transform: scale(1.22); box-shadow: 0 0 0 2px rgba(37,224,138,.55), 0 6px 22px rgba(37,224,138,.25); }
+.k-unit.on .k-char { color: #fff; font-size: 36px; text-shadow: 0 0 16px rgba(37,224,138,.9), 0 2px 8px rgba(0,0,0,.6); }
+.k-unit.on .k-jp { color: var(--green); font-size: 15px; }
+.k-unit.done { opacity: .45; }
+.k-unit.done .k-char { color: var(--text-2); }
 .k-progress { height: 5px; border-radius: 999px; background: rgba(255,255,255,.06); overflow: hidden; margin: 16px 0 8px; }
 .k-progress-fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--green), var(--cyan)); transition: width .08s linear; }
-.k-hint { font-size: 11.5px; color: var(--text-3); }
+.k-hint { font-size: 12px; color: var(--text-2); }
 
 /* ── 结果：一篇歌词，每字上下两排 ── */
 .result-wrap { margin-top: 6px; }
@@ -292,7 +297,7 @@ body {
 .nb-legend b { color: var(--text-2); }
 .nb-key { display: inline-block; padding: 0 8px; border-radius: 999px; font-size: 10px; margin: 0 2px; }
 .nb-key.ref { background: rgba(63,208,224,.14); color: var(--cyan); border: 1px solid rgba(63,208,224,.4); }
-.nb-key.my { background: rgba(37,224,138,.14); color: var(--green); border: 1px solid rgba(37,224,138,.4); }
+.nb-key.my { background: rgba(255,107,179,.14); color: #ff6bb3; border: 1px solid rgba(255,107,179,.4); }
 .nb-wrap {
   display: flex; align-items: stretch; gap: 0; overflow-x: auto; padding: 6px 4px 8px;
   border-radius: 11px; border: 1px solid var(--line); background: #0a1119; margin-bottom: 12px;
@@ -319,18 +324,19 @@ body {
   transition: top .25s ease, box-shadow .15s; white-space: nowrap;
 }
 .nb-bird.ref { left: 50%; transform: translateX(-50%); color: var(--cyan); text-shadow: 0 0 10px rgba(63,208,224,.25); }
-.nb-bird.my  { left: 50%; transform: translateX(-50%); color: var(--lime); }
-/* 两鸟重合 = 唱准：合成一朵花（简谱上原唱/下你唱），绿框 */
+/* 你唱的鸟：洋红，与青色原唱鸟形成冷暖对比，一眼分清谁是谁 */
+.nb-bird.my  { left: 50%; transform: translateX(-50%); color: #ff6bb3; text-shadow: 0 0 10px rgba(255,107,179,.3); }
+/* 两鸟重合 = 唱准：合成一朵花（简谱上原唱/下你唱），洋红→金渐变框 */
 .nb-bird.merged {
-  left: 50%; transform: translateX(-50%); color: var(--lime);
+  left: 50%; transform: translateX(-50%); color: #ffd166;
   font-size: 22px;
-  box-shadow: 0 0 0 2px rgba(37,224,138,.65);
-  background: rgba(37,224,138,.12);
+  box-shadow: 0 0 0 2px rgba(255,209,102,.7);
+  background: rgba(255,209,102,.14);
   padding: 4px 8px; gap: 1px;
 }
-.nb-bird.merged .nb-jp.my { color: #fff; background: rgba(37,224,138,.55); }
-.nb-bird.merged.perfect { box-shadow: 0 0 0 2px rgba(37,224,138,.65); }
-.nb-bird.merged.ok { box-shadow: 0 0 0 2px rgba(255,209,102,.6); }
+.nb-bird.merged .nb-jp.my { color: #fff; background: rgba(255,107,179,.55); }
+.nb-bird.merged.perfect { box-shadow: 0 0 0 2px rgba(255,209,102,.7); }
+.nb-bird.merged.ok { box-shadow: 0 0 0 2px rgba(255,209,102,.5); }
 /* 没唱到：半透明灰鸟位 */
 .nb-bird.my.missed { opacity: .45; filter: grayscale(.8); }
 .nb-jp { font: 700 11px/1.2 "PingFang SC", monospace; color: #fff; background: rgba(0,0,0,.4);
@@ -339,16 +345,15 @@ body {
 .nb-cloud { display: inline-block; height: 10px; margin-left: 2px; border-radius: 999px;
   vertical-align: middle; }
 .nb-bird.ref .nb-cloud { background: linear-gradient(90deg, rgba(63,208,224,.5), rgba(63,208,224,.08)); }
-.nb-bird.my  .nb-cloud { background: linear-gradient(90deg, rgba(125,220,90,.5), rgba(125,220,90,.08)); }
-.nb-bird.merged .nb-cloud { background: linear-gradient(90deg, rgba(37,224,138,.5), rgba(37,224,138,.08)); }
+.nb-bird.my  .nb-cloud { background: linear-gradient(90deg, rgba(255,107,179,.5), rgba(255,107,179,.08)); }
+.nb-bird.merged .nb-cloud { background: linear-gradient(90deg, rgba(255,209,102,.5), rgba(255,209,102,.08)); }
 .nb-bird.ref .nb-jp { color: var(--cyan); }
-.nb-bird.my .nb-jp { color: var(--lime); }
+.nb-bird.my .nb-jp { color: #ff6bb3; }
 /* 判定框色：只描你的那只鸟 */
 .nb-bird.my.perfect { box-shadow: 0 0 0 1.5px rgba(37,224,138,.55); }
 .nb-bird.my.ok { box-shadow: 0 0 0 1.5px rgba(255,209,102,.55); }
 .nb-bird.my.sharp { box-shadow: 0 0 0 1.5px rgba(255,159,67,.65); }
-.nb-bird.my.off { box-shadow: 0 0 0 1.5px rgba(255,77,94,.7); }
-.nb-col.on .nb-bird { filter: drop-shadow(0 0 8px rgba(37,224,138,.8)); }
+.nb-bird.my.off { box-shadow: 0 0 0 1.5px rgba(255,77,94,.7); }.nb-col.on .nb-bird { filter: drop-shadow(0 0 8px rgba(37,224,138,.8)); }
 .nb-col.on .nb-bird.ref { transform: translateX(-50%) scale(1.15); }
 .nb-col.on .nb-bird.my { transform: translateX(-50%) scale(1.15); }
 .nb-col.missed .nb-bird.my { opacity: .35; filter: grayscale(.6); }

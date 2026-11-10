@@ -193,6 +193,11 @@ check('高亮字含简谱', /k-jp/.test(kHtml) && /[1-7]/.test(kHtml), kHtml.sli
 check('高亮字含节拍', /k-beat/.test(kHtml) && /拍/.test(kHtml), kHtml.slice(0,80));
 check('高亮字含歌词', /k-char/.test(kHtml));
 check('有当前字高亮', /k-unit on/.test(kHtml), kHtml.slice(0,120));
+check('当前字是大号歌词（歌词是主角）', await evaluate(`(() => {
+  const c = document.querySelector('.k-unit.on .k-char');
+  if (!c) return false;
+  const fs = parseFloat(getComputedStyle(c).fontSize);
+  return fs >= 30; })()`));
 // 「什么时候开始唱每一句」：第 2 句起音前的 3-2-1 提词
 const cueHint = await evaluate(`(() => { window.__STUDIO.renderKaraokeAt(1.9);
   return document.getElementById('kHint').textContent; })()`);
@@ -245,6 +250,10 @@ const nb = await evaluate(`(() => { const st = window.__STUDIO.getState();
 check('小鸟图有 7 列', nb.cols === 7, String(nb.cols));
 check('偏高清唱是两只分开的鸟（14 只）', nb.birds === 14, String(nb.birds));
 check('每列都有判定框色', nb.tops.every((t) => t.band !== ''), JSON.stringify(nb.tops.map(t=>t.band)));
+// 你唱的鸟用洋红色（与青色原唱鸟区分开）
+check('你唱的鸟是洋红色（与原唱青色区分）', await evaluate(`(() => {
+  const my = document.querySelector('.nb-bird.my');
+  return my && my.classList.contains('my') && getComputedStyle(my).color.includes('255, 107, 179'); })()`));
 check('偏高清唱不出现重合鸟（merged=0）', await evaluate(`document.querySelectorAll('.nb-bird.merged').length === 0`));
 // 偏高清唱（+100¢ = 1 半音 ≈ +9% 高度）→ 你的鸟应明显飞得比原唱鸟高（my top < ref top）
 const hi = await evaluate(`(() => { const st = window.__STUDIO.getState();
