@@ -110,6 +110,27 @@ export async function listVocals() {
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 
+/**
+ * 重写一条录音的帧时间轴（老录音兼容）。
+ *
+ * 旧版本把 AudioContext 绝对时间存进了帧，下游各自归一导致回放/练唱错位。
+ * 打开历史记录时用这段音频重新对齐：以音频为真相，把帧时间整体平移，
+ * 并把修好的帧写回 IndexedDB，下次打开就是对的。
+ *
+ * @param {string} id
+ * @param {Array} newFrames 修正后的帧（t 从录音起点 0 起算）
+ */
+export async function rewriteFrames(id, newFrames) {
+  const db = await openDB();
+  const store = db.transaction(S_VOCALS, 'readwrite').objectStore(S_VOCALS);
+  const rec = await req2p(store.get(id));
+  if (!rec) return null;
+  rec.packed = packFrames(newFrames);
+  rec.meta = { ...(rec.meta || {}), framesFixed: true };
+  await req2p(store.put(rec));
+  return rec;
+}
+
 /** 取一条完整记录（含 frames） */
 export async function getVocal(id) {
   const db = await openDB();

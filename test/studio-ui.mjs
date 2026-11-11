@@ -353,6 +353,34 @@ await sleep(150);
 const dict2 = await evaluate(`window.__STUDIO.dictateState()`);
 check('点击后不崩（无麦克风环境安全降级）', await evaluate(`(() => !window.__err)()`));
 
+console.log('\n── 历史：打开记录 + 老数据时间轴自愈 ──');
+check('历史卡片有「打开」按钮', await evaluate(`window.__STUDIO.hasOpenBtn()`));
+// 造一条"老格式"记录：帧存的是 AudioContext 绝对时间（>60s）
+const absFrames = (() => {
+  const a = [];
+  const T0 = 1000.0;   // 假装按下录音时 ctx.currentTime = 1000s
+  for (const [m, s, e] of [[60,0,0.5],[62,0.5,1],[64,1,1.5],[65,1.5,2],[67,3,3.5],[69,3.5,4],[71,4,4.5]]) {
+    for (let t = s; t < e; t += 0.02) a.push({ t: T0 + t, midi: m, voiced: true, rms: 0.2, confidence: 0.9 });
+  }
+  return a;
+})();
+const healed = await evaluate(`(async () => {
+  const r = await window.__STUDIO.healFrames(${JSON.stringify(absFrames)}, null);
+  return JSON.stringify({ first: r.frames[0].t, fixed: r.fixed, n: r.frames.length });
+})()`);
+const h = JSON.parse(healed);
+check('老数据绝对时间被归一（首帧≈0）', Math.abs(h.first) < 0.05, String(h.first));
+check('标记为已修复', h.fixed === true);
+check('帧数不变', h.n === absFrames.length, String(h.n));
+// 打开一条历史参考记录 → 恢复解析卡
+const hRefId = await evaluate(`window.__STUDIO.importFrames(${REF}, '打开测试')`);
+await evaluate(`window.__STUDIO.openVocal('${hRefId}')`);
+await sleep(300);
+const opened = await evaluate(`window.__STUDIO.getState()`);
+check('打开历史后进入解析卡（ready）', opened.phase === 'ready', opened.phase);
+check('打开后解析卡可见', opened.parsedHidden === false);
+check('打开后有简谱格子', opened.jpCells === 7, String(opened.jpCells));
+
 console.log('\n── 历史任意两段互比 ──');
 const idA = await evaluate(`window.__STUDIO.importFrames(${REF}, '导入A')`);
 const idB = await evaluate(`window.__STUDIO.importFrames(${SHARP}, '导入B')`);

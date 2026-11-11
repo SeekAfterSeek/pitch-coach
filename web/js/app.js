@@ -29,7 +29,7 @@ import { uid, fmtTime, clamp } from './util.js';
 import {
   saveVocal, listVocals, getVocal, getVocalAudio,
   renameVocal, deleteVocal, clearVocals, vocalSubtitle,
-  saveVocalSnapshot, getVocalSnapshot,
+  saveVocalSnapshot, getVocalSnapshot, rewriteFrames,
 } from './history.js';
 
 /* ══════════════════ 状态 ══════════════════ */
@@ -1174,6 +1174,133 @@ async function playResultAudio(which) {
   tick();
 }
 
+/* ══════════════════ 历史：打开 / 时间轴自愈 ══════════════════ */
+
+/**
+ * 用录音音频校正一条历史记录的帧时间轴（老录音自愈）。
+ *
+ * 旧版把 AudioContext 绝对时间写进了帧；现在以【音频为真相】：
+ *   - 帧时间 = 相对首帧（和音频都从按下录音起算，只差首采样那一小段）
+ *   - 再用 RMS 包络互相关求出剩余起点差，把帧整体平移
+ * 校正后写回 IndexedDB，以后打开就是对的。
+ *
+ * @param {Array} frames 原始帧
+ * @param {Blob|null} blob 对应音频
+ * @returns {{frames:Array, offset:number, fixed:boolean}}
+ */
+async function healFrames(frames, blob) {
+  if (!frames?.length) return { frames: [], offset: 0, fixed: false };
+  const absLike = frames[0].t > 60;   // 绝对时间戳（>60s）说明是老数据
+  let out = frames.map((f) => ({ ...f }));
+
+  // ① 绝对时间 → 相对时间
+  if (absLike) {
+    const t0 = frames[0].t;
+    out = out.map((f) => ({ ...f, t: f.t - t0 }));
+  }
+  // ② 再按音频包络精修起点（老数据和新数据都能受益）
+  let offset = 0;
+  if (blob) {
+    try {
+      if (!S.engine) S.engine = new AudioEngine();
+      await S.engine.ensureContext();
+      const buf = await decodeFile(S.engine.ctx, blob);
+      const est = await estimateAudioStartOffset(buf, out);
+      if (est.ok && Math.abs(est.offset) > 0.005) {
+        offset = est.offset;
+        out = out.map((f) => ({ ...f, t: f.t + offset }));
+      }
+    } catch { /* 解不了就只做 ① */ }
+  }
+  return { frames: out, offset, fixed: absLike || Math.abs(offset) > 0.005 };
+}
+
+/** 打开一条历史录音：恢复当时的解析卡（歌词/谱子）或练唱结果 */
+async function openVocal(id) {
+  const v = await getVocal(id);
+  if (!v) { toast('这条录音数据缺失', 'err'); return; }
+  showParse('正在打开这段录音…', v.label);
+  const blob = await getVocalAudio(id).catch(() => null);
+  const { frames, offset, fixed } = await healFrames(v.frames, blob);
+  if (fixed) {
+    await rewriteFrames(id, frames).catch(() => {});
+    S.history = await listVocals(); renderHistory();
+  }
+  hideParse();
+  if (offset) console.log(`[历史] ${v.label} 时间轴校正 ${(offset * 1000).toFixed(0)}ms`);
+
+  const snap = v.meta?.snapshot || null;
+
+  // 练唱记录：恢复当时的结果视图（需要它的参考）
+  if (v.role === 'take' && snap?.result) {
+    const refId = snap.refId;
+    const refRec = refId ? await getVocal(refId) : S.refVocal;
+    if (refRec) {
+      const refFrames = refRec.frames && refRec.frames[0]
+        ? (refRec.frames[0].t > 60
+          ? refRec.frames.map((f) => ({ ...f, t: f.t - refRec.frames[0].t }))
+          : refRec.frames)
+        : [];
+      const parsed = parseVocal(refFrames, { title: refRec.label || '参考' });
+      const key = detectKey(parsed.notes);
+      const groups = groupPhrases(parsed.notes);
+      const lyricText = snap.lyricText || placeholderLyrics(groups);
+      const score = buildScore(parsed.notes, key, lyricText,
+        snap.charMap ? { charMap: snap.charMap, lineBreaks: snap.lineBreaks } : {});
+      S.refVocal = { ...refRec, frames: refFrames };
+      S.parsed = parsed; S.key = key; S.groups = groups;
+      S.score = score; S.lyricText = lyricText;
+      S.charMap = snap.charMap || scoreCharMap(score);
+      S.lineBreaks = snap.lineBreaks || null;
+      S.lyricsConfirmed = !!snap.confirmed;
+      S.refBlob = await getVocalAudio(refId).catch(() => null);
+      S.refAudioOffset = 0;
+      // 用存下的逐字结果直接重建结果视图
+      const r = snap.result;
+      S.lastPractice = {
+        words: r.words, summary: r.summary, align: r.align,
+        transposition: r.transposition, byLine: groupWordsByLine(r.words),
+      };
+      S.lastPair = { a: refId || null, b: id };
+      renderResult();
+      S.phase = 'result';
+      setStep(3);
+      toast(fixed ? '已打开（时间轴已校正）' : '已打开这一遍练唱', 'ok');
+      return;
+    }
+  }
+
+  // 参考记录 / 无结果快照：恢复解析卡
+  const parsed = parseVocal(frames, { title: v.label });
+  if (parsed.silent) { toast('这段几乎没检测到人声', 'err'); return; }
+  const key = detectKey(parsed.notes);
+  const groups = groupPhrases(parsed.notes);
+  S.refVocal = { ...v, frames };
+  S.refBlob = blob;
+  S.refAudioOffset = 0;   // healFrames 已把帧对齐到音频，无需再补
+  S.parsed = parsed;
+  S.key = key;
+  S.groups = groups;
+  const lyricText = snap?.lyricText || placeholderLyrics(groups);
+  S.lyricText = lyricText;
+  S.lyricsDraft = lyricText;
+  S.charMap = snap?.charMap || null;
+  S.lineBreaks = snap?.lineBreaks || null;
+  S.lyricsConfirmed = !!snap?.confirmed;
+  S.score = buildScore(parsed.notes, key, lyricText,
+    S.charMap ? { charMap: S.charMap, lineBreaks: S.lineBreaks } : {});
+  if (!S.charMap) S.charMap = scoreCharMap(S.score);
+  S.lastPair.a = id;
+  renderParsedCard(
+    fixed ? '✓ 已从历史打开（时间轴已校正，回放亮格与练唱提示都会对齐）'
+      : '✓ 已从历史打开',
+    'ok'
+  );
+  S.phase = 'ready';
+  setStep(3);
+  toast(fixed ? '已打开，时间轴已自动校正' : '已打开这段录音', 'ok');
+}
+
 /* ══════════════════ 历史：任意两段互比 ══════════════════ */
 
 function renderHistory() {
@@ -1197,6 +1324,7 @@ function renderHistory() {
           <small>${escapeHtml(vocalSubtitle(v))}</small>
         </div>
         <div class="hi-actions">
+          <button class="btn tiny primary" data-act="open" title="打开：看这段的原声/歌词/谱子/结果">打开</button>
           <button class="btn tiny" data-act="a" title="设为 A 参考">A</button>
           <button class="btn tiny" data-act="b" title="设为 B 对比">B</button>
           <button class="btn tiny ghost" data-act="play" title="播放">▶</button>
@@ -1206,6 +1334,12 @@ function renderHistory() {
       card.querySelectorAll('button').forEach((b) => {
         b.addEventListener('click', (e) => { e.stopPropagation(); onHistAction(b.dataset.act, v); });
       });
+      // 点卡片任意空白处 = 打开这段（和"打开"按钮等价，最好点）
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('button')) return;
+        onHistAction('open', v).catch((err) => toast('打开失败：' + err.message, 'err', 5000));
+      });
+      card.style.cursor = 'pointer';
       card.addEventListener('dblclick', () => onHistAction('rename', v));
       el.histList.appendChild(card);
     }
@@ -1214,6 +1348,7 @@ function renderHistory() {
 }
 
 async function onHistAction(act, v) {
+  if (act === 'open') { await openVocal(v.id); return; }
   if (act === 'a') { S.pair.a = v.id; if (S.pair.b === v.id) S.pair.b = null; }
   else if (act === 'b') { S.pair.b = v.id; if (S.pair.a === v.id) S.pair.a = null; }
   else if (act === 'play') { await playVocal(v.id); return; }
@@ -1454,6 +1589,10 @@ function installTestHooks() {
       speechOk: speechAvailable(),
       running: !!dictate,
     }),
+    // 历史打开 / 时间轴自愈
+    async openVocal(id) { await openVocal(id); return { phase: S.phase, lyricText: S.lyricText, lines: S.score?.lines?.length }; },
+    healFrames: (frames, blob) => healFrames(frames, blob),
+    hasOpenBtn: () => !!document.querySelector('.hist-item button[data-act="open"]'),
     setLyrics(text) { if (el.lyricEditor) { el.lyricEditor.value = text; onLyricEdit(); } return S.score; },
     realignLyrics() { return realignLyrics(); },
     confirmLyrics() { return confirmLyrics(); },
