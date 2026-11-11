@@ -12,7 +12,7 @@
  * 复用底层：audio.js、compare.js、notation.js、practice.js、history.js、util.js
  */
 
-import { AudioEngine, TakeRecorder, decodeFile, analyzeBuffer, playMidiTone } from './audio.js';
+import { AudioEngine, TakeRecorder, decodeFile, analyzeBuffer, playMidiTone, estimateAudioStartOffset } from './audio.js';
 import { parseVocal } from './compare.js';
 import {
   detectKey, buildScore, flattenScore, jianpuHtml, jianpuTitle,
@@ -68,6 +68,7 @@ const S = {
   audioUrl: null,
   countdown: 0,        // 练唱倒计时剩余秒
   countdownRAF: 0,
+  refAudioOffset: 0,   // 录下音频起点相对音高帧时间轴的偏移（秒）
   // 解析卡里播放"刚录的原声"：独立播放器 + 逐音符亮格
   refAudio: null,
   refAudioUrl: null,
@@ -311,6 +312,8 @@ function loop() {
   if (f) {
     S.recorder.push(f);
     el.micMeter.style.width = Math.round(clamp(S.engine.peakLevel() * 260, 0, 100)) + '%';
+    // 帧时间戳已是"窗口中心"，与 recorder.t0 同基准，直接相减即相对录音起点的时刻，
+    // 也就是与谱子（同样从录音起点起算）同一条时间轴。
     const elapsed = Math.max(0, f.t - S.recStartCtx);
     el.recTimer.textContent = fmtTime(elapsed);
     if (S.recKind === 'practice') updateKaraoke(elapsed);
@@ -319,7 +322,9 @@ function loop() {
 }
 
 /** 练唱中：逐字高亮当前句，显示每字的简谱与节拍。
- *  歌词是主角：当前字大号白字放中间最亮，音符退居其上作小字提示。 */
+ *  歌词是主角：当前字大号白字放中间最亮，音符退居其上作小字提示。
+ *  ★ 高亮判定用"当前时刻落在哪个音符的起止区间"——为了让短音符也不漏闪，
+ *    区间在相邻音符之间做 Voronoi 外扩（不留空档），并把容差放宽到 ±80ms。 */
 function updateKaraoke(vt) {
   const score = S.score;
   if (!score?.lines?.length) return;
@@ -334,10 +339,23 @@ function updateKaraoke(vt) {
   }
   const cur = lines[li], prev = lines[li - 1], next = lines[li + 1];
 
+  /** 某个字位此刻是否是"正在唱"的那个：
+   *  与相邻字位按中点划界（不留空档），再叠加 ±80ms 的容差，
+   *  避免帧间隔/渲染节流导致短音符整段被跳过。 */
+  const isOn = (units, j) => {
+    const u = units[j];
+    if (!u) return false;
+    const prevU = units[j - 1];
+    const nextU = units[j + 1];
+    const lo = prevU ? (prevU.end + u.start) / 2 : u.start - 0.08;
+    const hi = nextU ? (u.end + nextU.start) / 2 : u.end + 0.08;
+    return vt >= lo - 0.08 && vt < hi;
+  };
+
   const renderLine = (line, active) => {
     if (!line) return '';
-    return line.units.map((u) => {
-      const on = active && vt >= u.start && vt < u.end;
+    return line.units.map((u, j) => {
+      const on = active && isOn(line.units, j);
       const done = active && vt > u.end;
       return `<span class="k-unit${on ? ' on' : ''}${done ? ' done' : ''}" title="${escapeHtml(jianpuTitle(u.jianpu))}">
         <span class="k-jp">${jianpuHtml(u.jianpu)}<i class="k-beat">${escapeHtml(u.beat)}</i></span>
@@ -356,7 +374,10 @@ function updateKaraoke(vt) {
     el.kBirds.dataset.line = String(cur.index);
   }
   el.kBirds.querySelectorAll('.k-bird-col.glow').forEach((n) => n.classList.remove('glow'));
-  const birdCol = el.kBirds.querySelector(`.k-bird-col[data-note-idx="${cur.units.find((u) => vt >= u.start && vt < u.end)?.noteIdx}"]`);
+  const curIdx = cur.units.findIndex((u, j) => isOn(cur.units, j));
+  const birdCol = curIdx >= 0
+    ? el.kBirds.querySelector(`.k-bird-col[data-note-idx="${cur.units[curIdx].noteIdx}"]`)
+    : null;
   if (birdCol) birdCol.classList.add('glow');
 
   // 整句进度条
@@ -402,7 +423,9 @@ async function stopRecording() {
   el.recSpeech.classList.add('hidden');
   show(el.recordStrip, false);
   show(el.karaoke, false);
-  const frames = normalizeFrames(out.frames);
+  // 注意：TakeRecorder 产出的帧已经是【相对录音起点】的时间（与音频同轴），
+  // 不能再 normalize（那会按"首个采样"重新归零，又引入几十毫秒偏移）。
+  const frames = out.frames;
   if (!frames.length) {
     toast('没录到声音，请重试', 'err');
     resetToIdle();
@@ -449,6 +472,21 @@ async function commitReference(blob, frames) {
   S.key = detectKey(parsed.notes);
   S.groups = groupPhrases(parsed.notes);
   const counts = S.groups.map((p) => p.length);
+
+  // 音频起点校正：MediaRecorder 的 blob 起点与音高帧时间轴可能有几十毫秒差，
+  // 用 RMS 包络互相关求出来，回放亮格时补上，让"听到的"和"亮起的"同步。
+  S.refAudioOffset = 0;
+  if (blob && !blob._offsetTried) {
+    blob._offsetTried = true;
+    try {
+      if (!S.engine) S.engine = new AudioEngine();
+      await S.engine.ensureContext();
+      const buf = await decodeFile(S.engine.ctx, blob);
+      const est = await estimateAudioStartOffset(buf, frames);
+      S.refAudioOffset = est.ok ? est.offset : 0;
+      if (est.ok) console.log(`[同步] 音频起点偏移校正 ${(est.offset * 1000).toFixed(0)}ms (corr ${est.corr.toFixed(2)})`);
+    } catch { /* 解码失败就不校正，偏移为 0 */ }
+  }
 
   // 歌词来源优先级：
   // ① 录前已填歌词（最准——字数、断句都是你定的，直接按你的结构对齐）
@@ -881,12 +919,15 @@ async function playRefAudio() {
   el.btnPlayRef.disabled = true;
   el.btnStopRef.disabled = false;
   const total = Math.max(0.1, S.score?.duration || S.parsed?.duration || 1);
+  // 音频时刻 → 谱子时刻：补上录下的音频起点与音高帧时间轴之间的偏移
+  const off = S.refAudioOffset || 0;
   const tick = () => {
     if (!S.refPlaying || !S.refAudio) return;
-    const t = S.refAudio.currentTime;
+    const at = S.refAudio.currentTime;
+    const t = at + off;
     highlightRefAt(t);
-    el.refPlayFill.style.width = (clamp(t / total, 0, 1) * 100).toFixed(1) + '%';
-    el.refPlayHint.textContent = `原声 ${t.toFixed(1)}s / ${total.toFixed(1)}s · 亮起的格就是此刻唱到的音符`;
+    el.refPlayFill.style.width = (clamp(at / total, 0, 1) * 100).toFixed(1) + '%';
+    el.refPlayHint.textContent = `原声 ${at.toFixed(1)}s / ${total.toFixed(1)}s · 亮起的格就是此刻唱到的音符`;
     S.refPlayRAF = requestAnimationFrame(tick);
   };
   tick();

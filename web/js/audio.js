@@ -112,8 +112,12 @@ export class AudioEngine {
     if (!this.running || !this.analyser) return null;
     this.analyser.getFloatTimeDomainData(this.buf);
     const r = this.detector.detect(this.buf);
-    // t 为 AudioContext 绝对时间；对齐参考时间轴由 app 层用 origin 换算
-    const t = this.ctx.currentTime;
+    // t = 这一帧所代表音频的【中心时刻】。
+    // 坑：getFloatTimeDomainData 拿的是"最近 fftSize 个样本"，覆盖
+    // [now - win/sr, now]。若直接把 now 当时间戳，每个音符都会晚半窗（≈21ms）。
+    // 所以要减掉半个窗口，让时间戳对上音频内容本身。
+    const halfWin = (this.windowSize / 2) / this.sampleRate;
+    const t = this.ctx.currentTime - halfWin;
     const f = {
       t,
       midi: r.voiced ? r.midi : 0,
@@ -186,15 +190,23 @@ export class TakeRecorder {
       if (e.data && e.data.size > 0) this.chunks.push(e.data);
     };
     this.recorder.start(250);
-    this.t0 = this.engine.ctx.currentTime;
+    // t0 = 录音起点在 AudioContext 时间轴上的位置。
+    // 必须和 tick() 的帧时间戳用同一个"窗口中心"基准（同样减半窗），
+    // 否则每个音符都会稳定偏移半个窗口。
+    const halfWin = (this.engine.windowSize / 2) / this.engine.sampleRate;
+    this.t0 = this.engine.ctx.currentTime - halfWin;
     this.active = true;
   }
 
-  /** 每帧调用，累积音高帧 */
+  /** 每帧调用，累积音高帧。
+   *  ★ 关键：帧时间存成【相对录音起点】的相对时间（t - t0），
+   *  与 MediaRecorder 录下的音频 blob 完全同轴（音频也从按下录音起算）。
+   *  以前存 AudioContext 绝对时间、下游再用 frames[0].t 或 recorder.t0
+   *  各自归一，两条轴差几十~几百毫秒 → 原声回放亮格错位、练唱提示跟不上。 */
   push(frame) {
     if (!this.active || !frame) return;
     this.frames.push({
-      t: frame.t,
+      t: frame.t - this.t0,
       midi: frame.midi,
       voiced: frame.voiced,
       confidence: frame.confidence,
@@ -481,8 +493,80 @@ export function estimateOffset(ref, frames, opts = {}) {
   };
 }
 
-/** WAV 编码（16bit PCM） */
-export function encodeWav(channels, sampleRate) {
+/**
+ * 估计「音频起点」相对「音高帧时间轴」的偏移。
+ *
+ * 为什么会偏：音高帧从 AudioContext 的采样时刻起算，MediaRecorder 的 blob
+ * 从编码器收到第一包数据起算，两者之间常有几十毫秒的启动差（设备/后端不同）。
+ * 表现就是原声回放到某字时，谱子亮格比听到的早/晚一点。
+ *
+ * 做法：把音频解码后的 RMS 包络，与音高帧自带的 rms 包络做互相关，取最佳平移。
+ * 只在相关足够高时采用，避免瞎对齐。
+ *
+ * @param {AudioBuffer} buffer 录音音频
+ * @param {Array} frames 音高帧（t 相对录音起点，含 rms）
+ * @param {{maxLagSec?:number, stepSec?:number}} opts
+ * @returns {{offset:number, corr:number, ok:boolean}} offset>0 表示音频比帧晚
+ */
+export async function estimateAudioStartOffset(buffer, frames, opts = {}) {
+  const empty = { offset: 0, corr: 0, ok: false };
+  if (!buffer || !frames?.length) return empty;
+
+  // 音频侧 RMS 包络（10ms 一格）
+  const sr = buffer.sampleRate;
+  const ch = buffer.getChannelData(0);
+  const step = Math.max(1, Math.round(sr * 0.01));
+  const envA = [];
+  for (let i = 0; i + step < ch.length; i += step) {
+    let s = 0;
+    for (let k = 0; k < step; k++) s += ch[i + k] * ch[i + k];
+    envA.push(Math.sqrt(s / step));
+  }
+  if (envA.length < 10) return empty;
+  const stepSec = 0.01;
+
+  // 帧侧 RMS 包络（落到同样的 10ms 栅格）
+  const maxT = frames[frames.length - 1].t;
+  const nCell = Math.max(1, Math.ceil(maxT / stepSec) + 1);
+  const envB = new Float64Array(nCell);
+  const cntB = new Uint32Array(nCell);
+  for (const f of frames) {
+    const i = Math.round(f.t / stepSec);
+    if (i >= 0 && i < nCell) { envB[i] += f.rms || 0; cntB[i]++; }
+  }
+  for (let i = 0; i < nCell; i++) if (cntB[i]) envB[i] /= cntB[i];
+
+  const norm = (a) => {
+    let m = 0, n = 0;
+    for (const v of a) { m += v; n++; }
+    m = n ? m / n : 0;
+    let s = 0;
+    for (const v of a) s += (v - m) * (v - m);
+    const sd = Math.sqrt(s / Math.max(1, n)) || 1;
+    return { m, sd };
+  };
+  const A = norm(envA), B = norm(envB);
+
+  const maxLag = Math.round((opts.maxLagSec ?? 0.5) / stepSec);
+  let best = { lag: 0, corr: -Infinity };
+  for (let lag = -maxLag; lag <= maxLag; lag++) {
+    let num = 0, n = 0;
+    for (let i = 0; i < envA.length; i++) {
+      const j = i + lag;
+      if (j < 0 || j >= nCell) continue;
+      num += ((envA[i] - A.m) / A.sd) * ((envB[j] - B.m) / B.sd);
+      n++;
+    }
+    if (n < 20) continue;
+    const corr = num / n;
+    if (corr > best.corr) best = { lag, corr };
+  }
+  if (!Number.isFinite(best.corr) || best.corr < 0.3) return { offset: 0, corr: best.corr, ok: false };
+  // lag>0 表示音频内容在帧时间轴的更后面 → 音频起点比帧晚 lag 秒
+  return { offset: best.lag * stepSec, corr: best.corr, ok: true };
+}
+
+/** WAV 编码（16bit PCM） */export function encodeWav(channels, sampleRate) {
   const numCh = channels.length;
   const len = channels[0].length;
   const bytesPerSample = 2;
