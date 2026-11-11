@@ -875,13 +875,34 @@ function clearRefHighlight() {
   el.jpCellEditor.querySelectorAll('.jce-line-on').forEach((n) => n.classList.remove('jce-line-on'));
 }
 
-/** 把播放时刻 t 对应的音符格高亮（简谱表 + 逐字对应格同步） */
+/** 把播放时刻 t 对应的音符格高亮（简谱表 + 逐字对应格同步）。
+ *
+ *  ★ 真实演唱的音符之间必有换气空隙（用真实录音实测：严格区间会让
+ *    近一半播放时间没有任何高亮 —— 就是用户说的"中间那句没及时闪过"）。
+ *    所以这里和练唱视图同一口径：按相邻音符中点划界（Voronoi 外扩），
+ *    并把首音前/末音后各放宽 0.25s，保证整段播放始终有格子在亮。 */
 function highlightRefAt(t) {
   clearRefHighlight();
   const units = flattenScore(S.score);
+  if (!units.length) return;
+
+  const LEAD = 0.25, TAIL = 0.25;
   let cur = null;
-  for (const u of units) if (t >= u.start && t < u.end) { cur = u; break; }
+  for (let i = 0; i < units.length; i++) {
+    const u = units[i];
+    const prev = units[i - 1];
+    const next = units[i + 1];
+    const lo = prev ? (prev.end + u.start) / 2 : u.start - LEAD;
+    const hi = next ? (u.end + next.start) / 2 : u.end + TAIL;
+    if (t >= lo && t < hi) { cur = u; break; }
+  }
+  if (!cur) {
+    // 超出整体范围：贴最近的一头（播放器尾巴/开头也别让界面空着）
+    if (t < units[0].start) cur = units[0];
+    else if (t >= units[units.length - 1].end) cur = units[units.length - 1];
+  }
   if (!cur) return;
+
   const sel = (root) => root.querySelectorAll(`[data-note-idx="${cur.noteIdx}"]`);
   sel(el.jpSheet).forEach((n) => n.classList.add('jp-on'));
   sel(el.jpCellEditor).forEach((n) => n.classList.add('jce-on'));
@@ -889,6 +910,12 @@ function highlightRefAt(t) {
   if (l1) l1.classList.add('jp-line-on');
   const l2 = el.jpCellEditor.querySelector(`.jce-line[data-line="${cur.lineIndex}"]`);
   if (l2) l2.classList.add('jce-line-on');
+  // 小鸟图也同步亮（解析卡的鸟图也在用同一时刻）
+  const col = el.noteBlocks.querySelector(`.nb-col[data-note-idx="${cur.noteIdx}"]`);
+  if (col) {
+    el.noteBlocks.querySelectorAll('.nb-col.on').forEach((n) => n.classList.remove('on'));
+    col.classList.add('on');
+  }
 }
 
 function stopRefPlayback() {
@@ -1177,28 +1204,51 @@ async function playResultAudio(which) {
 /* ══════════════════ 历史：打开 / 时间轴自愈 ══════════════════ */
 
 /**
- * 用录音音频校正一条历史记录的帧时间轴（老录音自愈）。
+ * 校正一条历史记录（老录音自愈）——以【音频为真相】重新分析。
  *
- * 旧版把 AudioContext 绝对时间写进了帧；现在以【音频为真相】：
- *   - 帧时间 = 相对首帧（和音频都从按下录音起算，只差首采样那一小段）
- *   - 再用 RMS 包络互相关求出剩余起点差，把帧整体平移
- * 校正后写回 IndexedDB，以后打开就是对的。
+ * 旧录音的帧有两个问题：
+ *   ① 时间戳是 AudioContext 绝对时间（下游各自归一 → 回放/练唱错位）
+ *   ② 音高是旧版检测器算的（真人口型上会整段跳八度，出现 A1/E6 这类非人声值）
+ *
+ * 历史记录里有原始音频 blob，所以最彻底的做法是：拿音频用【当前】的检测器
+ * 重新分析，得到正确的音高 + 与音频同轴的时间。分析一次后写回，下次秒开。
+ *
+ * 音频解不出来时退回"只修时间轴"（至少回放和提示能对齐）。
  *
  * @param {Array} frames 原始帧
  * @param {Blob|null} blob 对应音频
- * @returns {{frames:Array, offset:number, fixed:boolean}}
+ * @returns {{frames:Array, offset:number, fixed:boolean, reanalyzed:boolean}}
  */
 async function healFrames(frames, blob) {
-  if (!frames?.length) return { frames: [], offset: 0, fixed: false };
-  const absLike = frames[0].t > 60;   // 绝对时间戳（>60s）说明是老数据
-  let out = frames.map((f) => ({ ...f }));
+  if (!frames?.length && !blob) return { frames: [], offset: 0, fixed: false, reanalyzed: false };
 
-  // ① 绝对时间 → 相对时间
+  // —— 首选：用当前检测器重新分析音频（音高和时间轴一起修好）——
+  if (blob) {
+    try {
+      if (!S.engine) S.engine = new AudioEngine();
+      await S.engine.ensureContext();
+      const buf = await decodeFile(S.engine.ctx, blob);
+      const raw = await analyzeBuffer(S.engine.ctx, buf, { hopSec: 0.02 });
+      if (raw?.length) {
+        // analyzeBuffer 的时间戳本身就是相对音频起点（0 起），与 blob 完全同轴
+        const ok = raw.filter((f) => f.voiced && f.midi > 0).length;
+        if (ok > 10) {
+          console.log(`[历史] 重新分析音频：${(buf.duration || 0).toFixed(1)}s → ${raw.length} 帧 / ${ok} 有声`);
+          return { frames: raw, offset: 0, fixed: true, reanalyzed: true };
+        }
+      }
+    } catch (e) {
+      console.warn('[历史] 音频重分析失败，退回时间轴校正：', e.message);
+    }
+  }
+
+  // —— 退路：只把时间轴修对（绝对时间 → 相对时间 + 包络互相关微调）——
+  let out = frames.map((f) => ({ ...f }));
+  const absLike = out[0].t > 60;
   if (absLike) {
-    const t0 = frames[0].t;
+    const t0 = out[0].t;
     out = out.map((f) => ({ ...f, t: f.t - t0 }));
   }
-  // ② 再按音频包络精修起点（老数据和新数据都能受益）
   let offset = 0;
   if (blob) {
     try {
@@ -1210,9 +1260,9 @@ async function healFrames(frames, blob) {
         offset = est.offset;
         out = out.map((f) => ({ ...f, t: f.t + offset }));
       }
-    } catch { /* 解不了就只做 ① */ }
+    } catch { /* 解不了就只做归一 */ }
   }
-  return { frames: out, offset, fixed: absLike || Math.abs(offset) > 0.005 };
+  return { frames: out, offset, fixed: absLike || Math.abs(offset) > 0.005, reanalyzed: false };
 }
 
 /** 打开一条历史录音：恢复当时的解析卡（歌词/谱子）或练唱结果 */
@@ -1221,26 +1271,28 @@ async function openVocal(id) {
   if (!v) { toast('这条录音数据缺失', 'err'); return; }
   showParse('正在打开这段录音…', v.label);
   const blob = await getVocalAudio(id).catch(() => null);
-  const { frames, offset, fixed } = await healFrames(v.frames, blob);
+  const { frames, offset, fixed, reanalyzed } = await healFrames(v.frames, blob);
   if (fixed) {
     await rewriteFrames(id, frames).catch(() => {});
     S.history = await listVocals(); renderHistory();
   }
   hideParse();
-  if (offset) console.log(`[历史] ${v.label} 时间轴校正 ${(offset * 1000).toFixed(0)}ms`);
+  if (reanalyzed) console.log(`[历史] ${v.label} 已用当前检测器重新分析并写回`);
+  else if (offset) console.log(`[历史] ${v.label} 时间轴校正 ${(offset * 1000).toFixed(0)}ms`);
 
   const snap = v.meta?.snapshot || null;
 
-  // 练唱记录：恢复当时的结果视图（需要它的参考）
+  // 练唱记录：恢复结果视图（需要它的参考）
   if (v.role === 'take' && snap?.result) {
     const refId = snap.refId;
     const refRec = refId ? await getVocal(refId) : S.refVocal;
     if (refRec) {
-      const refFrames = refRec.frames && refRec.frames[0]
-        ? (refRec.frames[0].t > 60
-          ? refRec.frames.map((f) => ({ ...f, t: f.t - refRec.frames[0].t }))
-          : refRec.frames)
-        : [];
+      // 参考也按同一套自愈流程处理：音频重新分析 → 音高/时间轴都正确
+      const refBlob = await getVocalAudio(refId).catch(() => null);
+      const refHeal = await healFrames(refRec.frames, refBlob);
+      if (refHeal.fixed) await rewriteFrames(refId, refHeal.frames).catch(() => {});
+      const refFrames = refHeal.frames;
+
       const parsed = parseVocal(refFrames, { title: refRec.label || '参考' });
       const key = detectKey(parsed.notes);
       const groups = groupPhrases(parsed.notes);
@@ -1253,19 +1305,32 @@ async function openVocal(id) {
       S.charMap = snap.charMap || scoreCharMap(score);
       S.lineBreaks = snap.lineBreaks || null;
       S.lyricsConfirmed = !!snap.confirmed;
-      S.refBlob = await getVocalAudio(refId).catch(() => null);
+      S.refBlob = refBlob;
       S.refAudioOffset = 0;
-      // 用存下的逐字结果直接重建结果视图
-      const r = snap.result;
-      S.lastPractice = {
-        words: r.words, summary: r.summary, align: r.align,
-        transposition: r.transposition, byLine: groupWordsByLine(r.words),
-      };
+
+      // 关键：如果参考或练唱是被重新分析过的（旧检测器算错了音高），
+      // 快照里存的逐字结果就是错的，必须用修正后的数据重算一遍。
+      if (reanalyzed || refHeal.reanalyzed) {
+        const units = flattenScore(score);
+        const r = scorePracticeWords(units, key, frames, { tol: S.tol });
+        S.lastPractice = {
+          ...r, byLine: groupWordsByLine(r.words),
+          align: r.align, transposition: r.transposition,
+        };
+        console.log(`[历史] ${v.label} 对比结果已按新检测器重算：${r.summary.sung}/${r.summary.total} 唱到`);
+        toast('已打开，并按修正后的音高重算了这一遍', 'ok');
+      } else {
+        const r = snap.result;
+        S.lastPractice = {
+          words: r.words, summary: r.summary, align: r.align,
+          transposition: r.transposition, byLine: groupWordsByLine(r.words),
+        };
+        toast(fixed ? '已打开（时间轴已校正）' : '已打开这一遍练唱', 'ok');
+      }
       S.lastPair = { a: refId || null, b: id };
       renderResult();
       S.phase = 'result';
       setStep(3);
-      toast(fixed ? '已打开（时间轴已校正）' : '已打开这一遍练唱', 'ok');
       return;
     }
   }
@@ -1593,6 +1658,11 @@ function installTestHooks() {
     async openVocal(id) { await openVocal(id); return { phase: S.phase, lyricText: S.lyricText, lines: S.score?.lines?.length }; },
     healFrames: (frames, blob) => healFrames(frames, blob),
     hasOpenBtn: () => !!document.querySelector('.hist-item button[data-act="open"]'),
+    // 调试/真实数据体检：取某条记录的原始帧
+    getVocalFrames: async (id) => {
+      const v = await getVocal(id);
+      return v?.frames || null;
+    },
     setLyrics(text) { if (el.lyricEditor) { el.lyricEditor.value = text; onLyricEdit(); } return S.score; },
     realignLyrics() { return realignLyrics(); },
     confirmLyrics() { return confirmLyrics(); },

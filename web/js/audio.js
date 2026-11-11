@@ -381,6 +381,13 @@ export function cleanFrames(frames, opts = {}) {
     }
   }
 
+  // ── 3.5 整段八度回归（真实清唱实测必要）──
+  // YIN 在真人口型变化/气声上会稳定地整段跳八度：用真实录音观察过
+  // 一段 36s 清唱里出现 midi 34.5（A1，低于人声下限）与 midi 88.9（E6，高于上限）。
+  // 单帧谐波校验能修一部分，但成段偏移要靠"整段分布"来判断：
+  // 以中位数为锚，把明显低一个八度/高一个八度的帧折回来。
+  fixOctaveDrift(out, aggressive);
+
   // ── 4. 旋律平滑：滑窗中值（压掉颤音和短促干扰）──
   // 只在同一个"音"内部平滑，跨音符的大跳保留
   if (aggressive) {
@@ -415,6 +422,57 @@ export function cleanFrames(frames, opts = {}) {
   }
 
   return out;
+}
+
+/**
+ * 整段八度漂移修正。
+ *
+ * 真实清唱录音里，YIN 常出现成片跳八度的段落（不是单帧毛刺）：
+ * 一段 36s 的真实录音里观察到 midi 34.5（A1）和 88.9（E6）——
+ * 前者低于人声下限，后者高于上限，但它们在局部是"连续、稳定"的，
+ * 所以中值滤波和单帧谐波校验都留不住。
+ *
+ * 做法：
+ *  1) 以整段有声帧的中位数为锚
+ *  2) 滑动窗口（约 0.5s）内如果平均音高偏离锚 ≥10 半音，
+ *     且折回一个八度后更接近锚（差距缩小 6 半音以上），就把这一窗折回
+ *  3) 修正后再剔一次超出人声范围（E2~C6，midi 40~84）的帧
+ */
+function fixOctaveDrift(out, aggressive) {
+  const idx = [];
+  for (let i = 0; i < out.length; i++) if (out[i].voiced && out[i].midi > 0) idx.push(i);
+  if (idx.length < 20) return;
+
+  const vals = idx.map((i) => out[i].midi).sort((a, b) => a - b);
+  const anchor = vals[vals.length >> 1];
+  const win = aggressive ? 25 : 15;     // 0.3~0.5s 窗口（20ms/帧）
+
+  for (let s = 0; s < idx.length; s += win) {
+    const seg = idx.slice(s, s + win);
+    if (seg.length < 5) continue;
+    const avg = seg.reduce((a, i) => a + out[i].midi, 0) / seg.length;
+    const dev = avg - anchor;
+    if (Math.abs(dev) < 10) continue;          // 离锚点不远，不动
+
+    // 试折 ±12 半音，看哪个更接近锚点
+    const up = avg + 12, down = avg - 12;
+    let cents = '';
+    if (Math.abs(down - anchor) + 6 < Math.abs(dev)) cents = 'down';
+    else if (Math.abs(up - anchor) + 6 < Math.abs(dev)) cents = 'up';
+    if (!cents) continue;
+
+    const delta = cents === 'down' ? -12 : 12;
+    for (const i of seg) out[i].midi += delta;
+  }
+
+  // 折完再兜底：明显不属于人声的帧直接丢弃
+  const LO = 40, HI = 84;   // E2 ~ C6
+  for (const f of out) {
+    if (f.voiced && (f.midi < LO - 2 || f.midi > HI + 2)) {
+      f.voiced = false;
+      f.midi = 0;
+    }
+  }
 }
 
 /**

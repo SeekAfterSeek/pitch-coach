@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 音高检测核心 —— YIN (de Cheveigné & Kawahara, 2002) 的 FFT 加速实现
  *
  * 为什么选 YIN 而不是 CREPE：
@@ -19,8 +19,8 @@
 import { Autocorrelator, Spectrum } from './fft.js';
 import { hzToMidi, midiToHz, clamp } from './util.js';
 
-export const PITCH_MIN_HZ = 60;    // 男低音下限附近（C2 ≈ 65Hz）
-export const PITCH_MAX_HZ = 1400;  // 女高音 + 少量余量（F6 ≈ 1397Hz）
+export const PITCH_MIN_HZ = 80;    // 人声下限附近（E2 ≈ 82Hz，男低音极限）
+export const PITCH_MAX_HZ = 1100;  // 女高音上限附近（C6 ≈ 1047Hz，含少量余量）
 
 export class PitchDetector {
   /**
@@ -167,13 +167,18 @@ export class PitchDetector {
   }
 
   /**
-   * 谐波校验：如果候选 f0 的二分频处有强能量，且 f0 处能量不足以支撑，
-   * 说明检测到了二次谐波（真实基频是 f0/2）。
-   * 对男声低音区尤其重要：基频弱、泛音强时 YIN 容易跳到八度上。
+   * 谐波校验（双向）：修正 YIN 的八度误判。
+   *
+   * 用真实清唱录音实测：老版只查 f0/2，漏掉了反向的八度跳变——
+   * 人声实际音高被检成高八度（midi 88.9 = E6，人声不可能），
+   * 或低八度（midi 34.5 = A1，低于人声下限）。
+   *
+   * 现在两个方向都查，并且都要求"另一方向能量显著更强"才改：
+   *   - f0/2 能量 > f0 的 1.35 倍 → 真实基频在低八度，降下来
+   *   - f0*2 能量 > f0 的 1.8 倍 且 f0 本身很弱 → 真实基频在高八度，升上去
+   * 阈值不对称：降八度更常见（男性低音区泛音强），升八度要求更严格。
    */
   correctOctave(x, hz) {
-    if (hz / 2 < this.minHz) return hz;  // 不可能更低
-
     const mag = this.spec.run(x);
     const binHz = this.sampleRate / this.windowSize;
     const W = this.windowSize;
@@ -182,18 +187,32 @@ export class PitchDetector {
       const b = f / binHz;
       if (b < 1 || b >= mag.length - 1) return 0;
       const i0 = Math.floor(b);
-      const frac = b - i0;
-      // 抛物线插值幅值
-      const a = mag[i0 - 1] || 0, m = mag[i0] || 0, c = mag[i0 + 2] || 0;
-      const peak = Math.max(m, (a + m + c) / 3);
-      return peak * (1 - frac) + peak * frac;
+      // 抛物线插值幅值（取 1 栅格内的最强峰，避免桶间泄漏漏检）
+      let peak = 0;
+      for (let k = i0 - 1; k <= i0 + 1; k++) {
+        if (k >= 1 && k < mag.length) peak = Math.max(peak, mag[k] || 0);
+      }
+      return peak;
     };
 
-    const eHalf = energyAt(hz / 2);
-    const eFull = energyAt(hz);
-    // f0/2 能量显著强于 f0，则降八度
-    if (eHalf > eFull * 1.35 && eHalf > 1e-4) {
-      return hz / 2;
+    // ① 低八度修正：候选 f0 其实是二次谐波
+    if (hz / 2 >= this.minHz) {
+      const eHalf = energyAt(hz / 2);
+      const eFull = energyAt(hz);
+      if (eHalf > eFull * 1.35 && eHalf > 1e-4) {
+        hz = hz / 2;
+      }
+    }
+    // ② 高八度修正：候选 f0 只是真实音高的低八度（f0 处能量弱、2f0 强）
+    //    门限更严：要求 2f0 强出很多，且 f0 本身确实很弱（避免把"基频弱但正确"
+    //    的男低音误升八度——合成测试里弱基频信号就栽在这）。
+    if (hz * 2 <= this.maxHz) {
+      const eFull = energyAt(hz);
+      const eDouble = energyAt(hz * 2);
+      const weakFundamental = eFull < 0.15;         // f0 真的没什么能量
+      if (weakFundamental && eDouble > eFull * 3.0 && eDouble > 1e-3) {
+        hz = hz * 2;
+      }
     }
     return hz;
   }

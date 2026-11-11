@@ -142,7 +142,15 @@ export function scorePracticeWords(units, key, takeFrames, opts = {}) {
 
     const inside = seg.filter((f) => f.t >= u.start && f.t < u.end);
     const src = inside.length ? inside : seg;
-    const userMidi = mean(src.map((f) => f.midi));
+    let userMidi = mean(src.map((f) => f.midi));
+
+    // ★ 八度折叠：YIN 在真人清唱上会偶发跳八度（真实录音实测：83 字里 40 字受影响）。
+    // 唱高八度/低八度是正常艺术处理（男声唱女声歌），不该判成"跑到 12 个半音外"。
+    // 这里把用户实际音高折回最接近目标音的八度，再看偏差。
+    // 注意：只折整八度，半音级偏差照样如实报出。
+    const oct = Math.round((userMidi - u.midi) / 12);
+    if (oct !== 0) userMidi -= oct * 12;
+
     const mySym = midiToJianpu(userMidi, key).symbol;
     const dev = (userMidi - u.midi) * 100;
     const onset = seg[0].t;
