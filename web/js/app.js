@@ -29,6 +29,7 @@ import { uid, fmtTime, clamp } from './util.js';
 import {
   saveVocal, listVocals, getVocal, getVocalAudio,
   renameVocal, deleteVocal, clearVocals, vocalSubtitle,
+  saveVocalSnapshot, getVocalSnapshot,
 } from './history.js';
 
 /* ══════════════════ 状态 ══════════════════ */
@@ -366,6 +367,7 @@ async function commitReference(blob, frames) {
     label: '参考 · ' + new Date().toLocaleString('zh-CN', { hour12: false }),
     role: 'reference', noteCount: parsed.notes.length,
   });
+  S._refRecId = rec.id;   // 确定歌词时把快照挂到这条记录上
   S.history = await listVocals();
   renderHistory();
   await animateParse();
@@ -401,6 +403,8 @@ async function commitReference(blob, frames) {
   S.score = buildScore(parsed.notes, S.key, S.lyricText);
   S.charMap = scoreCharMap(S.score);   // 逐字对应格 / 重排都基于它
   S.lastPair.a = rec.id;
+  // 参考解析快照：历史「打开」时能恢复这一版的解析卡（歌词/谱子）
+  saveVocalSnapshot(rec.id, { lyricText: S.lyricText, charMap: S.charMap, confirmed: false });
   renderParsedCard(status, statusKind);
   S.phase = 'ready';
   setStep(3);
@@ -582,6 +586,10 @@ function confirmLyrics() {
   S.lyricText = charMapToText(S.score, S.charMap);
   S.lyricsConfirmed = true;
   S.score = buildScore(S.parsed.notes, S.key, S.lyricText, { charMap: S.charMap, lineBreaks: S.lineBreaks });
+  // 快照已确定的歌词+谱子：历史「打开」时完整恢复
+  if (S.refVocal?.id) saveVocalSnapshot(S.refVocal.id, {
+    lyricText: S.lyricText, charMap: S.charMap, lineBreaks: S.lineBreaks, confirmed: true,
+  });
   renderJianpuSheet();
   renderCellEditor();
   el.lyricEditor.value = S.lyricText;
@@ -847,6 +855,13 @@ async function commitPractice(blob, frames) {
   const r = scorePracticeWords(units, S.key, frames, { tol: S.tol });
   S.lastPractice = { ...r, byLine: groupWordsByLine(r.words) };
   S.lastPair.b = rec.id;
+  // 练唱快照：当时用的参考、歌词/谱子、逐字结果——历史「打开」能完整回放这一遍
+  saveVocalSnapshot(rec.id, {
+    refId: S.refVocal?.id || S.lastPair.a || null,
+    lyricText: S.lyricText, charMap: S.charMap, lineBreaks: S.lineBreaks,
+    confirmed: S.lyricsConfirmed,
+    result: { words: r.words, summary: r.summary, align: r.align, transposition: r.transposition },
+  });
   await animateParse();
   hideParse();
   renderResult();
