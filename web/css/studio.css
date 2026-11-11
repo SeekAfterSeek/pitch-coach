@@ -131,7 +131,11 @@ body {
 /* 录前歌词输入（可选） */
 .pre-lyrics { width: min(560px, 100%); text-align: left; }
 .pre-lyrics .lyric-editor { min-height: 72px; font-size: 14px; }
+.pre-lyrics-tools { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
 .pre-lyrics-hint { display: block; font-size: 10.5px; color: var(--text-3); margin-top: 4px; }
+/* 听写状态：识别中的呼吸点 */
+.pre-lyrics-tools .lyric-status.listening { color: var(--cyan); }
+.pre-lyrics-tools .lyric-status.ok { color: var(--green); }
 
 /* ── 录音条 ── */
 .record-strip {

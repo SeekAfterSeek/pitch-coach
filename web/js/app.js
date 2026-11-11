@@ -87,7 +87,7 @@ function cacheEls() {
   for (const id of [
     'sessionPill','statusDot','statusText','btnMic','btnHelp',
     'stageSteps','stageHero','heroIcon','heroTitle','heroDesc','stageActions','btnRecordRef',
-    'preLyricInput',
+    'preLyricInput','btnDictate','dictateStatus',
     'recordStrip','recDot','recLabel','recTimer','micMeter','btnStopRec',
     'parseStrip','parseTitle','parseSub','parseBar',
     'parsedCard','parsedBadge','parsedTitle','parsedKey','keyName','keyJianpu',
@@ -161,7 +161,65 @@ async function ensureMic() {
   }
 }
 
-/* ══════════════════ 录音 ══════════════════ */
+/* ══════════════════ 录前歌词听写（语音转文字） ══════════════════ */
+
+let dictate = null;     // 听写控制器（不入 S，避免被 reset 清掉）
+let dictateBase = '';   // 已固化的听写文本（final 句逐句累积）
+
+/** 开/关听写：念歌词 → 自动转文字填进预填框；
+ *  说完一句停一下 = 自动加标点断句（final 段落之间补逗号/句号）。 */
+function toggleDictate() {
+  if (dictate) {
+    // 正在听写 → 停止：收尾补句号
+    const t = dictate.stop();
+    dictate = null;
+    el.btnDictate.classList.remove('ok');
+    el.btnDictate.textContent = '🎙️ 语音转文字·念歌词';
+    el.dictateStatus.classList.remove('listening');
+    if (el.preLyricInput) {
+      let v = el.preLyricInput.value.trim();
+      if (v && !/[。！？.!?]$/.test(v)) v += '。';
+      el.preLyricInput.value = v;
+    }
+    el.dictateStatus.textContent = t ? '✓ 听写完成，可继续手动修改' : '（没识别到内容）';
+    el.dictateStatus.classList.toggle('ok', !!t);
+    return;
+  }
+  if (!speechAvailable()) {
+    toast('此浏览器不支持语音识别，请手动输入歌词', 'err');
+    return;
+  }
+  // 确保麦克风可用（听写和录音共用）
+  ensureMic().then(() => {
+    dictateBase = el.preLyricInput?.value.trim() || '';
+    el.preLyricInput?.focus();
+    dictate = startSpeech({
+      onPartial: (t) => {
+        el.dictateStatus.classList.add('listening');
+        el.dictateStatus.textContent = `🎙️ 正在听写：${(t || '').slice(-24)}`;
+        // 实时上屏：已确认部分 + 识别中的尾巴
+        if (el.preLyricInput) el.preLyricInput.value = dictateBase ? dictateBase + '，' + t : (t || '');
+      },
+      onFinal: (t) => {
+        // 一句 final 落地 → 固化成 base，下一句前面补逗号（标点断句）
+        if (t) {
+          dictateBase = dictateBase ? dictateBase + '，' + t : t;
+          if (el.preLyricInput) el.preLyricInput.value = dictateBase;
+        }
+      },
+      onError: (msg) => {
+        if (msg === 'not-allowed' || msg === 'service-not-allowed') {
+          el.dictateStatus.textContent = '麦克风权限被拒，无法听写';
+        }
+      },
+    });
+    if (dictate) {
+      el.btnDictate.classList.add('ok');
+      el.btnDictate.textContent = '⏹ 停止听写';
+      el.dictateStatus.textContent = '🎙️ 正在听写… 念完一句停一下自动断句';
+    }
+  }).catch(() => {});
+}
 
 async function startRecording(kind) {
   await ensureMic();
@@ -1234,6 +1292,12 @@ function playBlob(blob) {
 function resetToIdle() {
   stopRefPlayback();
   stopBirdGlow();
+  // 听写还在跑就停掉
+  if (dictate) { dictate.stop(); dictate = null; }
+  dictateBase = '';
+  el.btnDictate.classList.remove('ok');
+  el.btnDictate.textContent = '🎙️ 语音转文字·念歌词';
+  el.dictateStatus.textContent = '';
   S.phase = 'idle';
   S.refVocal = null; S.refBlob = null; S.parsed = null; S.key = null; S.score = null; S.lyricText = '';
   S.charMap = null; S.lineBreaks = null; S.groups = null;
@@ -1256,6 +1320,8 @@ function bind() {
   el.helpMask.addEventListener('click', (e) => { if (e.target === el.helpMask) show(el.helpMask, false); });
 
   el.btnRecordRef.addEventListener('click', () => startRecording('ref').catch(() => {}));
+  // 录前歌词的语音转文字（听写）：念一句停一下自动加标点
+  el.btnDictate.addEventListener('click', toggleDictate);
   el.btnStopRec.addEventListener('click', () => stopRecording().catch((e) => toast('录音处理失败：' + e.message, 'err', 6000)));
   el.btnPractice.addEventListener('click', () => {
     if (!S.parsed || !S.score) { toast('请先录入参考人声', 'err'); return; }
@@ -1340,6 +1406,13 @@ function installTestHooks() {
       };
     },
     getPreLyrics: () => el.preLyricInput?.value ?? '',
+    // 听写状态探针（真实听写需要麦克风+网络，CDP 只能验证 UI 装配）
+    dictateState: () => ({
+      hasBtn: !!el.btnDictate, hasStatus: !!el.dictateStatus,
+      btnText: el.btnDictate.textContent,
+      speechOk: speechAvailable(),
+      running: !!dictate,
+    }),
     setLyrics(text) { if (el.lyricEditor) { el.lyricEditor.value = text; onLyricEdit(); } return S.score; },
     realignLyrics() { return realignLyrics(); },
     confirmLyrics() { return confirmLyrics(); },

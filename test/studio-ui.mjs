@@ -84,8 +84,8 @@ console.log('\n── 初始态：单页、第一个按钮 = 录入参考人声 
 const init = await evaluate(`window.__STUDIO.getState()`);
 check('初始 phase=idle', init.phase === 'idle', init.phase);
 check('主操作区可见', await evaluate(`!document.getElementById('stageActions').classList.contains('hidden')`));
-const firstBtn = await evaluate(`(() => { const b=document.querySelector('#stageActions .btn'); return b?.textContent.trim(); })()`);
-check('第一个按钮是「录入参考人声」', /录入参考人声/.test(firstBtn || ''), firstBtn);
+const firstBtn = await evaluate(`(() => { const b=document.querySelector('#stageActions .btn.big'); return b?.textContent.trim(); })()`);
+check('主按钮是「录入参考人声」', /录入参考人声/.test(firstBtn || ''), firstBtn);
 check('无旧版标签', await evaluate(`!document.querySelector('.tabs') && !document.getElementById('view-library')`));
 
 console.log('\n── ① 录入参考人声 → 解析结果只三块 ──');
@@ -340,6 +340,18 @@ check('录后预填框已清空', await evaluate(`window.__STUDIO.getPreLyrics()
 // 不填预填 → 走占位/识别路径（现有行为不变）
 const pre2 = await evaluate(`window.__STUDIO.commitReferenceFrames(${REF}).then(x => x.lyricText)`);
 check('不填预填歌词 → 照旧占位/识别路径', /○|一闪一闪/.test(pre2), pre2);
+
+console.log('\n── 录前歌词听写（语音转文字）UI 装配 ──');
+const dict = await evaluate(`window.__STUDIO.dictateState()`);
+check('有「语音转文字·念歌词」按钮', dict.hasBtn === true, JSON.stringify(dict));
+check('有听写状态提示位', dict.hasStatus === true);
+check('按钮初始文案正确', /语音转文字/.test(dict.btnText), dict.btnText);
+check('听写不在运行（初始）', dict.running === false);
+// 点一次按钮：无麦克风环境下应安全处理（不崩、状态有反馈）
+await evaluate(`document.getElementById('btnDictate').click()`);
+await sleep(150);
+const dict2 = await evaluate(`window.__STUDIO.dictateState()`);
+check('点击后不崩（无麦克风环境安全降级）', await evaluate(`(() => !window.__err)()`));
 
 console.log('\n── 历史任意两段互比 ──');
 const idA = await evaluate(`window.__STUDIO.importFrames(${REF}, '导入A')`);

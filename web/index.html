@@ -52,7 +52,11 @@
         <!-- 可选：先填歌词（知道字数和断句后，解析时直接按你的结构对齐，更准） -->
         <div class="pre-lyrics" id="preLyrics">
           <textarea id="preLyricInput" class="lyric-editor" spellcheck="false" placeholder="（可选）先填歌词再录：按标点断句，如「一闪一闪，亮晶晶。」&#10;填了之后解析会按你的字数和断句直接对齐，更准更顺；不填也能唱，录完再填再匹配。"></textarea>
-          <small class="pre-lyrics-hint">可选 · 不填就直接录；填了就按你断的句解析</small>
+          <div class="pre-lyrics-tools">
+            <button class="btn tiny" id="btnDictate">🎙️ 语音转文字·念歌词</button>
+            <span class="lyric-status" id="dictateStatus"></span>
+          </div>
+          <small class="pre-lyrics-hint">可选 · 不填就直接录；填了就按你断的句解析 · 念歌词时说完一句停一下，自动加标点断句</small>
         </div>
         <button class="btn big primary" id="btnRecordRef">
           <span class="ico">⏺</span> 录入参考人声
