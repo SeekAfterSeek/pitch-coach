@@ -82,6 +82,24 @@ export async function saveVocal(input) {
   return { ...rec, frames };
 }
 
+/** 保存/更新一条录音的快照（歌词、谱子对应、练唱结果——历史「打开」用） */
+export async function saveVocalSnapshot(id, snapshot) {
+  const db = await openDB();
+  const store = db.transaction(S_VOCALS, 'readwrite').objectStore(S_VOCALS);
+  const rec = await req2p(store.get(id));
+  if (!rec) return null;
+  rec.meta = { ...(rec.meta || {}), snapshot: { ...(rec.meta?.snapshot || {}), ...snapshot } };
+  await req2p(store.put(rec));
+  return rec;
+}
+
+/** 取一条录音的快照（无则 null） */
+export async function getVocalSnapshot(id) {
+  const db = await openDB();
+  const rec = await req2p(db.transaction(S_VOCALS, 'readonly').objectStore(S_VOCALS).get(id));
+  return rec?.meta?.snapshot || null;
+}
+
 /** 列出全部历史（按时间倒序），不含解包帧 */
 export async function listVocals() {
   const db = await openDB();

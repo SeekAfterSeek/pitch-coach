@@ -127,7 +127,11 @@ body {
 .hero-icon { font-size: 52px; line-height: 1; margin-bottom: 8px; }
 .stage-hero h1 { margin: 0 0 6px; font-size: 22px; font-weight: 680; }
 .stage-hero p { margin: 0 auto; max-width: 540px; color: var(--text-2); font-size: 13px; line-height: 1.7; }
-.stage-actions { display: flex; justify-content: center; gap: 12px; margin-bottom: 6px; }
+.stage-actions { display: flex; flex-direction: column; justify-content: center; gap: 12px; margin-bottom: 6px; align-items: center; }
+/* 录前歌词输入（可选） */
+.pre-lyrics { width: min(560px, 100%); text-align: left; }
+.pre-lyrics .lyric-editor { min-height: 72px; font-size: 14px; }
+.pre-lyrics-hint { display: block; font-size: 10.5px; color: var(--text-3); margin-top: 4px; }
 
 /* ── 录音条 ── */
 .record-strip {

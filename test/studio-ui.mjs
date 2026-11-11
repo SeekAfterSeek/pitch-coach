@@ -328,6 +328,19 @@ check('候选列表渲染 2 条', candN === 2, String(candN));
 await evaluate(`window.__STUDIO.openSongPicker && document.getElementById('btnCloseSong').click()`);
 check('关闭弹窗', await evaluate(`!document.getElementById('songMask').classList.contains('open')`));
 
+console.log('\n── 录前填歌词（可选）：解析直接按你的字数/断句对齐 ──');
+// 录前填「一闪一闪，亮晶晶」→ 解析后歌词应直接按标点排成 2 行、逐字对齐
+const pre = await evaluate(`window.__STUDIO.setPreLyricsAndCommit('一闪一闪，亮晶晶', ${REF})`);
+check('录前歌词生效：解析卡歌词已按标点排 2 行', pre.lineChars?.join('|') === '一闪一闪|亮晶晶', JSON.stringify(pre.lineChars));
+check('录前歌词状态提示对齐成功', /已按你录前填的歌词对齐/.test(pre.status), pre.status);
+check('录前歌词 charMap 长度 = 7', pre.charMap?.length === 7, JSON.stringify(pre.charMap));
+check('录前排版 lineBreaks 末项 = 7', pre.lineBreaks?.[pre.lineBreaks.length - 1] === 7, JSON.stringify(pre.lineBreaks));
+// 录前歌词用完即清：不影响下一轮
+check('录后预填框已清空', await evaluate(`window.__STUDIO.getPreLyrics() === ''`));
+// 不填预填 → 走占位/识别路径（现有行为不变）
+const pre2 = await evaluate(`window.__STUDIO.commitReferenceFrames(${REF}).then(x => x.lyricText)`);
+check('不填预填歌词 → 照旧占位/识别路径', /○|一闪一闪/.test(pre2), pre2);
+
 console.log('\n── 历史任意两段互比 ──');
 const idA = await evaluate(`window.__STUDIO.importFrames(${REF}, '导入A')`);
 const idB = await evaluate(`window.__STUDIO.importFrames(${SHARP}, '导入B')`);

@@ -87,6 +87,7 @@ function cacheEls() {
   for (const id of [
     'sessionPill','statusDot','statusText','btnMic','btnHelp',
     'stageSteps','stageHero','heroIcon','heroTitle','heroDesc','stageActions','btnRecordRef',
+    'preLyricInput',
     'recordStrip','recDot','recLabel','recTimer','micMeter','btnStopRec',
     'parseStrip','parseTitle','parseSub','parseBar',
     'parsedCard','parsedBadge','parsedTitle','parsedKey','keyName','keyJianpu',
@@ -349,7 +350,9 @@ async function stopRecording() {
     resetToIdle();
     return;
   }
-  if (S.recKind === 'ref') await commitReference(out.blob, frames);
+  if (S.recKind === 'ref') {
+    await commitReference(out.blob, frames);
+  }
   else await commitPractice(out.blob, frames);
 }
 
@@ -388,11 +391,25 @@ async function commitReference(blob, frames) {
   S.key = detectKey(parsed.notes);
   S.groups = groupPhrases(parsed.notes);
   const counts = S.groups.map((p) => p.length);
-  // 优先用语音识别到的歌词自动逐句填；识别不到才退回占位符
+
+  // 歌词来源优先级：
+  // ① 录前已填歌词（最准——字数、断句都是你定的，直接按你的结构对齐）
+  // ② 录音时语音识别到的文本
+  // ③ 占位符 ○
+  const preLyrics = (el.preLyricInput?.value || '').trim();
   let draft = placeholderLyrics(S.groups);
   let status = '未识别到歌词，用占位符 ○ 也能先练，或直接改上面文字';
   let statusKind = '';
-  if (S.speechText && S.speechText.trim()) {
+  S.charMap = null; S.lineBreaks = null;
+  if (preLyrics) {
+    // 录前歌词：先按用户断句重排（字↔音符对应 + 按标点排版），一步到位
+    const r = realignLyricsToScore(preLyrics, S.groups);
+    draft = r.text;
+    S.charMap = r.charMap;
+    S.lineBreaks = r.lineBreaks;
+    status = `已按你录前填的歌词对齐（${r.totalChars} 字 ↔ ${r.noteCount} 音符，${r.userPhrases} 句），请核对后点「确定歌词」`;
+    statusKind = 'ok';
+  } else if (S.speechText && S.speechText.trim()) {
     draft = alignTextToPhrases(S.speechText, counts);
     status = '已自动识别歌词，请核对/修改，然后点「确定歌词」';
     statusKind = 'ok';
@@ -400,12 +417,15 @@ async function commitReference(blob, frames) {
   S.lyricText = draft;
   S.lyricsDraft = draft;
   S.lyricsConfirmed = false;
-  S.score = buildScore(parsed.notes, S.key, S.lyricText);
-  S.charMap = scoreCharMap(S.score);   // 逐字对应格 / 重排都基于它
+  S.score = buildScore(parsed.notes, S.key, S.lyricText,
+    S.charMap ? { charMap: S.charMap, lineBreaks: S.lineBreaks } : {});
+  if (!S.charMap) S.charMap = scoreCharMap(S.score);   // 逐字对应格 / 重排都基于它
   S.lastPair.a = rec.id;
   // 参考解析快照：历史「打开」时能恢复这一版的解析卡（歌词/谱子）
   saveVocalSnapshot(rec.id, { lyricText: S.lyricText, charMap: S.charMap, confirmed: false });
   renderParsedCard(status, statusKind);
+  // 录前歌词只用一次：解析消费完就清空预填框，避免下一轮误用
+  if (el.preLyricInput) el.preLyricInput.value = '';
   S.phase = 'ready';
   setStep(3);
 }
@@ -1309,6 +1329,17 @@ function installTestHooks() {
       await commitReference(null, normalizeFrames(frames));
       return { phase: S.phase, key: S.key, score: S.score, lyricText: S.lyricText };
     },
+    // 模拟"录前填歌词"：写入预填框再注入参考（解析将按预填结构对齐）
+    async setPreLyricsAndCommit(text, frames) {
+      if (el.preLyricInput) el.preLyricInput.value = text;
+      await commitReference(null, normalizeFrames(frames));
+      return {
+        lyricText: S.lyricText, charMap: S.charMap, lineBreaks: S.lineBreaks,
+        status: el.lyricStatus.textContent,
+        lines: S.score?.lines?.length, lineChars: S.score?.lines?.map((l) => l.units.map((u) => u.char).join('')),
+      };
+    },
+    getPreLyrics: () => el.preLyricInput?.value ?? '',
     setLyrics(text) { if (el.lyricEditor) { el.lyricEditor.value = text; onLyricEdit(); } return S.score; },
     realignLyrics() { return realignLyrics(); },
     confirmLyrics() { return confirmLyrics(); },
